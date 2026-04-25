@@ -54,39 +54,55 @@ function base64ToBinary(b64: string): Uint8Array {
   return bytes;
 }
 
+const ZIP_CENTRAL_DIR_HEADER = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIR = 0x06054b50;
+
 /**
  * 从 JAR (ZIP) 中提取 classes.dex
- * 支持 STORED (0) 和 DEFLATE (8) 压缩方式
+ * 通过 Central Directory 定位（兼容 Data Descriptor / streaming 模式）
  */
 export async function extractDexFromJar(jarBytes: Uint8Array): Promise<Uint8Array | null> {
   const view = new DataView(jarBytes.buffer, jarBytes.byteOffset, jarBytes.byteLength);
-  let offset = 0;
 
-  while (offset + 30 <= jarBytes.length) {
-    // 检查 Local File Header 签名
-    if (view.getUint32(offset, true) !== ZIP_LOCAL_FILE_HEADER) break;
+  // 1. 从文件尾部找 End of Central Directory（倒序搜索签名）
+  let eocdOffset = -1;
+  for (let i = jarBytes.length - 22; i >= 0 && i >= jarBytes.length - 65557; i--) {
+    if (view.getUint32(i, true) === ZIP_END_OF_CENTRAL_DIR) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return null;
 
-    const compressionMethod = view.getUint16(offset + 8, true);
-    const compressedSize = view.getUint32(offset + 18, true);
-    const uncompressedSize = view.getUint32(offset + 22, true);
-    const fileNameLen = view.getUint16(offset + 26, true);
-    const extraFieldLen = view.getUint16(offset + 28, true);
+  const centralDirOffset = view.getUint32(eocdOffset + 16, true);
+  const centralDirEntries = view.getUint16(eocdOffset + 10, true);
 
-    const fileNameBytes = jarBytes.subarray(offset + 30, offset + 30 + fileNameLen);
-    const fileName = new TextDecoder().decode(fileNameBytes);
+  // 2. 遍历 Central Directory 找 classes.dex
+  let cdOffset = centralDirOffset;
+  for (let i = 0; i < centralDirEntries; i++) {
+    if (cdOffset + 46 > jarBytes.length) break;
+    if (view.getUint32(cdOffset, true) !== ZIP_CENTRAL_DIR_HEADER) break;
 
-    const dataOffset = offset + 30 + fileNameLen + extraFieldLen;
+    const compressionMethod = view.getUint16(cdOffset + 10, true);
+    const compressedSize = view.getUint32(cdOffset + 20, true);
+    const uncompressedSize = view.getUint32(cdOffset + 24, true);
+    const fileNameLen = view.getUint16(cdOffset + 28, true);
+    const extraFieldLen = view.getUint16(cdOffset + 30, true);
+    const commentLen = view.getUint16(cdOffset + 32, true);
+    const localHeaderOffset = view.getUint32(cdOffset + 42, true);
+
+    const fileName = new TextDecoder().decode(jarBytes.subarray(cdOffset + 46, cdOffset + 46 + fileNameLen));
 
     if (fileName === 'classes.dex') {
+      // 从 Local File Header 计算数据偏移
+      const lfhFileNameLen = view.getUint16(localHeaderOffset + 26, true);
+      const lfhExtraLen = view.getUint16(localHeaderOffset + 28, true);
+      const dataOffset = localHeaderOffset + 30 + lfhFileNameLen + lfhExtraLen;
       const rawData = jarBytes.subarray(dataOffset, dataOffset + compressedSize);
 
-      if (compressionMethod === 0) {
-        // STORED
-        return rawData;
-      }
+      if (compressionMethod === 0) return rawData;
 
       if (compressionMethod === 8) {
-        // DEFLATE — 使用 DecompressionStream（CF Worker + Node.js 18+ 原生支持）
         try {
           const ds = new DecompressionStream('deflate-raw');
           const writer = ds.writable.getWriter();
@@ -102,7 +118,6 @@ export async function extractDexFromJar(jarBytes: Uint8Array): Promise<Uint8Arra
             chunks.push(value);
             totalLen += value.length;
           }
-
           await writePromise;
 
           const result = new Uint8Array(uncompressedSize || totalLen);
@@ -116,12 +131,10 @@ export async function extractDexFromJar(jarBytes: Uint8Array): Promise<Uint8Arra
           return null;
         }
       }
-
-      // 不支持的压缩方式
       return null;
     }
 
-    offset = dataOffset + compressedSize;
+    cdOffset += 46 + fileNameLen + extraFieldLen + commentLen;
   }
 
   return null;
