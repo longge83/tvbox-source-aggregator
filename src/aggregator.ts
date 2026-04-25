@@ -13,7 +13,7 @@ import { loadBlacklist, applyBlacklist, pruneBlacklist, saveBlacklist } from './
 import { transformSiteNames } from './core/cleaner';
 import { parseConfigJson, type FetchProxyConfig } from './core/fetcher';
 import { buildJarRegistry, assignJars, buildJarStorageAdapter } from './core/jar-registry';
-import { scrapeSourceList, scrapeMacCMSSources } from './core/source-scraper';
+import { scrapeSourceList, scrapeMacCMSSources, type ScrapeSourceConfig, type ScrapeMacCMSConfig } from './core/source-scraper';
 import type { NameTransformConfig, JarAssignment, EdgeProxyConfig } from './core/types';
 
 export async function runAggregation(storage: Storage, config: AppConfig): Promise<void> {
@@ -34,49 +34,53 @@ export async function runAggregation(storage: Storage, config: AppConfig): Promi
 
 async function _runAggregation(storage: Storage, config: AppConfig, startTime: number): Promise<void> {
 
-  // Step 0: 自动抓取源（juwanhezi.com）
-  console.log('[aggregation] Step 0: Auto-scraping sources from juwanhezi.com...');
-  try {
-    const scraped = await scrapeSourceList();
-    if (scraped.length > 0) {
-      // 读取现有手动源
-      const existingRaw = await storage.get(KV_MANUAL_SOURCES);
-      const existingSources: SourceEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      const existingUrls = new Set(existingSources.map(s => s.url));
+  // Step 0: 自动抓取源（需配置 SCRAPE_SOURCE_URL 环境变量）
+  if (config.scrapeSourceUrl && config.scrapeSourceReferer) {
+    console.log('[aggregation] Step 0: Auto-scraping sources...');
+    try {
+      const scrapeCfg: ScrapeSourceConfig = { url: config.scrapeSourceUrl, referer: config.scrapeSourceReferer };
+      const scraped = await scrapeSourceList(scrapeCfg);
+      if (scraped.length > 0) {
+        const existingRaw = await storage.get(KV_MANUAL_SOURCES);
+        const existingSources: SourceEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
+        const existingUrls = new Set(existingSources.map(s => s.url));
 
-      // 合并：新抓取的源如果不在现有列表中则添加
-      let added = 0;
-      for (const source of scraped) {
-        if (!existingUrls.has(source.url)) {
-          existingSources.push(source);
-          existingUrls.add(source.url);
-          added++;
+        let added = 0;
+        for (const source of scraped) {
+          if (!existingUrls.has(source.url)) {
+            existingSources.push(source);
+            existingUrls.add(source.url);
+            added++;
+          }
+        }
+
+        if (added > 0) {
+          await storage.put(KV_MANUAL_SOURCES, JSON.stringify(existingSources));
+          console.log(`[aggregation] Auto-scraped: ${added} new sources added (total: ${existingSources.length})`);
+        } else {
+          console.log(`[aggregation] Auto-scrape: no new sources (${scraped.length} scraped, all exist)`);
         }
       }
-
-      if (added > 0) {
-        await storage.put(KV_MANUAL_SOURCES, JSON.stringify(existingSources));
-        console.log(`[aggregation] Auto-scraped: ${added} new sources added (total: ${existingSources.length})`);
-      } else {
-        console.log(`[aggregation] Auto-scrape: no new sources (${scraped.length} scraped, all exist)`);
-      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[aggregation] Auto-scrape failed (non-blocking): ${msg}`);
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[aggregation] Auto-scrape failed (non-blocking): ${msg}`);
   }
 
-  // Step 0.5: 自动抓取 MacCMS 资源站（直接从 mycj.pro API）
-  try {
-    console.log('[aggregation] Step 0.5: Auto-scraping MacCMS sources from mycj.pro...');
-    const scraped = await scrapeMacCMSSources();
-    if (scraped.length > 0) {
-      await storage.put(KV_MACCMS_SOURCES, JSON.stringify(scraped));
-      console.log(`[aggregation] MacCMS auto-scraped: ${scraped.length} sources updated`);
+  // Step 0.5: MacCMS 资源站自动抓取（需配置 MACCMS_API_URL 环境变量）
+  if (config.maccmsApiUrl && config.maccmsAesKey && config.maccmsAesIv) {
+    console.log('[aggregation] Step 0.5: Auto-scraping MacCMS sources...');
+    try {
+      const maccmsCfg: ScrapeMacCMSConfig = { apiUrl: config.maccmsApiUrl, aesKey: config.maccmsAesKey, aesIv: config.maccmsAesIv };
+      const scraped = await scrapeMacCMSSources(maccmsCfg);
+      if (scraped.length > 0) {
+        await storage.put(KV_MACCMS_SOURCES, JSON.stringify(scraped));
+        console.log(`[aggregation] MacCMS auto-scraped: ${scraped.length} sources updated`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[aggregation] MacCMS auto-scrape failed (non-blocking): ${msg}`);
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[aggregation] MacCMS auto-scrape failed (non-blocking): ${msg}`);
   }
 
   // Step 1: 读取手动配置的源（含自动抓取合并后的）

@@ -57,6 +57,12 @@ function buildConfig(port: number): AppConfig {
     fetchTimeoutMs: parseInt(process.env.FETCH_TIMEOUT_MS || '') || DEFAULT_FETCH_TIMEOUT_MS,
     cronSchedule: process.env.CRON_SCHEDULE || '0 5 * * *',
     localBaseUrl: baseUrl.replace(/\/$/, ''),
+    // 自动抓取（环境变量驱动）
+    scrapeSourceUrl: process.env.SCRAPE_SOURCE_URL,
+    scrapeSourceReferer: process.env.SCRAPE_SOURCE_REFERER,
+    maccmsApiUrl: process.env.MACCMS_API_URL,
+    maccmsAesKey: process.env.MACCMS_AES_KEY,
+    maccmsAesIv: process.env.MACCMS_AES_IV,
   };
 }
 

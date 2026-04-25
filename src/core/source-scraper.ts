@@ -1,23 +1,32 @@
-// 自动抓取源列表（私有功能）
-// 1. juwanhezi.com — TVBox 配置源
-// 2. MacCMS 萌芽采集插件 — MacCMS 资源站
+// 自动抓取源列表
+// 1. 可配置的 TVBox 配置源抓取
+// 2. MacCMS 萌芽采集插件资源站抓取
+// 通过环境变量控制：未配置则不启用
 
 import type { SourceEntry, MacCMSSourceEntry } from './types';
 
-const SCRAPE_URL = 'https://www.juwanhezi.com/ajax/load';
-const REFERER = 'https://www.juwanhezi.com/jsonlist';
 const MAX_PAGES = 10;
 
+export interface ScrapeSourceConfig {
+  url: string;      // 抓取 API 地址
+  referer: string;  // Referer header
+}
+
+export interface ScrapeMacCMSConfig {
+  apiUrl: string;   // API 地址
+  aesKey: string;   // AES-128-CBC 密钥
+  aesIv: string;    // AES-128-CBC IV
+}
+
 /**
- * 从 juwanhezi.com 抓取 TVBox 源列表
- * 返回 SourceEntry[]（名称 + URL）
+ * 抓取 TVBox 源列表
  */
-export async function scrapeSourceList(): Promise<SourceEntry[]> {
+export async function scrapeSourceList(cfg: ScrapeSourceConfig): Promise<SourceEntry[]> {
   const allSources: SourceEntry[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     try {
-      const html = await fetchPage(page);
+      const html = await fetchPage(cfg, page);
       if (!html || !html.trim()) break;
 
       const sources = parsePage(html);
@@ -36,13 +45,13 @@ export async function scrapeSourceList(): Promise<SourceEntry[]> {
   return allSources;
 }
 
-async function fetchPage(page: number): Promise<string> {
-  const resp = await fetch(SCRAPE_URL, {
+async function fetchPage(cfg: ScrapeSourceConfig, page: number): Promise<string> {
+  const resp = await fetch(cfg.url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': 'okhttp/3.12.0',
-      'Referer': REFERER,
+      'Referer': cfg.referer,
       'X-Requested-With': 'XMLHttpRequest',
     },
     body: `action=load&page=source&type=one&paged=${page}`,
@@ -76,13 +85,7 @@ function parsePage(html: string): SourceEntry[] {
 
 // ============================================================
 // MacCMS 萌芽采集资源站自动抓取
-// 直接调用 mycj.pro API → AES 解密 → 提取资源站列表
-// 无需 MacCMS 实例、无需登录
 // ============================================================
-
-const MYCJ_API_URL = 'https://collect.mycj.pro/collect/v10/cjdata.json';
-const MYCJ_AES_KEY = 'msqmEd4S6W5EBRLn';
-const MYCJ_AES_IV = '8848474575383635';
 
 interface MycjRow {
   flag?: string;
@@ -95,27 +98,25 @@ interface MycjRow {
 }
 
 /**
- * 从 mycj.pro API 直接抓取 MacCMS 资源站列表
- * GET API → AES-128-CBC 解密 → 提取 zanzhu+m3u8 → 按 flag 去重
- * 无需任何配置，零依赖
+ * 从 MacCMS 采集插件 API 抓取资源站列表
+ * AES-128-CBC 解密 → 提取 zanzhu+m3u8 → 按 flag 去重
  */
-export async function scrapeMacCMSSources(): Promise<MacCMSSourceEntry[]> {
-  console.log('[maccms-scraper] Fetching from mycj.pro API...');
+export async function scrapeMacCMSSources(cfg: ScrapeMacCMSConfig): Promise<MacCMSSourceEntry[]> {
+  console.log('[maccms-scraper] Fetching from API...');
 
-  const url = `${MYCJ_API_URL}?t=${Math.floor(Date.now() / 1000)}`;
+  const url = `${cfg.apiUrl}?t=${Math.floor(Date.now() / 1000)}`;
   const resp = await fetch(url);
 
   if (!resp.ok) {
-    throw new Error(`mycj.pro API HTTP ${resp.status}`);
+    throw new Error(`MacCMS API HTTP ${resp.status}`);
   }
 
   const json = await resp.json() as { code?: number; data?: string };
   if (json.code !== 200 || !json.data) {
-    throw new Error(`mycj.pro API error: code=${json.code}`);
+    throw new Error(`MacCMS API error: code=${json.code}`);
   }
 
-  // AES-128-CBC 解密
-  const decrypted = await decryptMycjData(json.data);
+  const decrypted = await decryptData(json.data, cfg.aesKey, cfg.aesIv);
   const parsed = JSON.parse(decrypted) as {
     list?: Record<string, { rows?: MycjRow[] }>;
   };
@@ -124,7 +125,6 @@ export async function scrapeMacCMSSources(): Promise<MacCMSSourceEntry[]> {
     throw new Error('Decrypted data has no list field');
   }
 
-  // 只取 zanzhu(推荐) + m3u8(切片)
   const sections = ['zanzhu', 'm3u8'] as const;
   const seen = new Map<string, MacCMSSourceEntry>();
 
@@ -132,7 +132,6 @@ export async function scrapeMacCMSSources(): Promise<MacCMSSourceEntry[]> {
     const rows = parsed.list[section]?.rows || [];
     for (const row of rows) {
       if (!row.flag || !row.apis || !row.name) continue;
-      // 按 flag 去重（zanzhu 优先，m3u8 补充）
       if (!seen.has(row.flag)) {
         seen.set(row.flag, {
           key: row.flag,
@@ -144,19 +143,14 @@ export async function scrapeMacCMSSources(): Promise<MacCMSSourceEntry[]> {
   }
 
   const entries = Array.from(seen.values());
-  console.log(`[maccms-scraper] Scraped ${entries.length} unique MacCMS sources (zanzhu + m3u8 deduped by flag)`);
+  console.log(`[maccms-scraper] Scraped ${entries.length} unique sources`);
   return entries;
 }
 
-/**
- * AES-128-CBC 解密萌芽插件数据
- * Web Crypto API (CF Worker / Node.js 18+ 兼容)
- */
-async function decryptMycjData(base64Data: string): Promise<string> {
-  const keyBytes = new TextEncoder().encode(MYCJ_AES_KEY);
-  const ivBytes = new TextEncoder().encode(MYCJ_AES_IV);
+async function decryptData(base64Data: string, key: string, iv: string): Promise<string> {
+  const keyBytes = new TextEncoder().encode(key);
+  const ivBytes = new TextEncoder().encode(iv);
 
-  // base64 → Uint8Array
   const binaryStr = atob(base64Data);
   const ciphertext = new Uint8Array(binaryStr.length);
   for (let i = 0; i < binaryStr.length; i++) {
