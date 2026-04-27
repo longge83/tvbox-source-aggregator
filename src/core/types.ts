@@ -167,35 +167,45 @@ export interface EdgeProxyConfig {
   vercel?: string;  // Vercel 代理 URL，如 "https://fetch.riowang.win"
 }
 
-// JAR 仓库：单个 JAR 的元数据
-export interface JarMeta {
-  url: string;
-  md5: string | null;
-  classes: string[];       // DEX 中提取的 spider 类名 ["Ali","Bili",...]
-  sizeBytes?: number;
-  lastFetchedAt: string;   // ISO
-  status: 'ok' | 'fetch_failed' | 'parse_failed';
-  errorMessage?: string;
+// 网盘平台
+export type CloudPlatform =
+  | 'aliyun'      // 阿里云盘
+  | 'bilibili'    // Bilibili
+  | 'quark'       // 夸克网盘
+  | 'uc'          // UC 网盘
+  | 'pan115'      // 115 网盘
+  | 'tianyi'      // 天翼云盘
+  | 'baidu'       // 百度网盘
+  | 'pan123'      // 123 网盘
+  | 'thunder'     // 迅雷
+  | 'pikpak';     // PikPak
+
+// 单个平台的凭证
+export interface CloudCredential {
+  platform: CloudPlatform;
+  credential: Record<string, string>;
+  obtainedAt: string;   // ISO 时间
+  expiresAt?: string;
+  status: 'valid' | 'expired' | 'unknown';
 }
 
-// JAR 仓库：完整索引（序列化存 KV）
-export interface JarRegistry {
-  version: 1;
-  updatedAt: string;
-  jars: Record<string, JarMeta>; // key = JAR URL
+// 凭证注入策略
+export interface CredentialPolicyConfig {
+  allowedHighRiskKeys: string[];  // 用户手动放行的高风险源 key
+  deniedKeys: string[];           // 用户手动拉黑的源 key
 }
 
-// JAR 分配结果（纯计算，不持久化）
-export interface JarAssignment {
-  globalSpiderUrl: string | null;
-  globalSpiderFull: string | null;
-  siteJarMap: Map<string, string>;   // dedupKey(key|api) → 完整 spider 字符串
-  orphanedKeys: Set<string>;         // dedupKey 集合，类找不到的站点
-  stats: {
-    totalType3: number;
-    coveredByGlobal: number;
-    coveredByPerSite: number;
-    orphaned: number;
-    urlBasedApi: number;
-  };
+// 搜索配额配置（持久化到 KV）
+export interface SearchQuotaConfig {
+  maxSearchable: number;        // 可搜索源上限，0 = 不限制
+  pinnedKeys: string[];         // 置顶源 key 列表（排到 sites 最前面）
+}
+
+// 搜索配额报告
+export interface SearchQuotaReport {
+  totalSites: number;           // 站点总数
+  jsExcluded: number;           // JS 源排除数
+  searchable: number;           // 最终可搜索数
+  pinnedCount: number;          // 置顶源命中数
+  truncated: number;            // 被截断数（maxSearchable > 0 时）
 }

@@ -400,6 +400,34 @@ ${sharedStyles}
     </div>
   </div>
 
+  <div class="health-section" id="searchQuotaSection" style="display:none">
+    <div class="health-summary">
+      <div class="health-label" data-i18n="searchQuota">Search Quota</div>
+      <div class="health-counts">
+        <span class="health-count ok"><span class="health-dot ok"></span> <span id="sqActiveCount">-</span> <span data-i18n="sqActive">active</span></span>
+        <span class="health-count error"><span class="health-dot error"></span> <span id="sqExcludedCount">-</span> <span data-i18n="sqExcluded">excluded</span></span>
+      </div>
+    </div>
+    <div class="collapsible-toggle" id="sqToggle" onclick="toggleCollapsible(this)" data-i18n="healthDetails">Details</div>
+    <div class="collapsible-body" id="sqBody">
+      <div class="health-table-wrap">
+        <table class="health-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th data-i18n="sqName">Name</th>
+              <th data-i18n="sqSource">Source</th>
+              <th data-i18n="sqReason">Reason</th>
+            </tr>
+          </thead>
+          <tbody id="sqTableBody">
+            <tr><td colspan="4" class="empty">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="config-section">
     <div class="config-label" data-i18n="configUrlLabel">TVBox Config URL</div>
     <div class="config-url-row">
@@ -433,6 +461,9 @@ const translations = {
     sourceHealth:'Source Health', healthDetails:'Details', healthName:'Name',
     healthStatus:'Status', healthFails:'Fails', healthLastOk:'Last OK',
     healthNoData:'No health data yet', healthNever:'--',
+    searchQuota:'Search Quota', sqActive:'active', sqExcluded:'excluded',
+    sqName:'Name', sqSource:'Source', sqReason:'Reason',
+    sqPinned:'pinned', sqHttp:'http', sqMainJar:'main jar', sqIndepJar:'indep jar',
     footer:'TVBox Source Aggregator &middot; Cron 05:00 UTC Daily',
     navAdmin:'Admin', navConfigEditor:'Config Editor',
   },
@@ -445,6 +476,9 @@ const translations = {
     sourceHealth:'源健康状态', healthDetails:'详情', healthName:'名称',
     healthStatus:'状态', healthFails:'失败', healthLastOk:'最后成功',
     healthNoData:'暂无健康数据', healthNever:'--',
+    searchQuota:'搜索配额', sqActive:'活跃', sqExcluded:'排除',
+    sqName:'名称', sqSource:'来源', sqReason:'原因',
+    sqPinned:'置顶', sqHttp:'HTTP', sqMainJar:'主 JAR', sqIndepJar:'独立 JAR',
     footer:'TVBox 源聚合器 &middot; 每日 UTC 05:00 定时任务',
     navAdmin:'管理', navConfigEditor:'配置编辑',
   }
@@ -545,6 +579,31 @@ const STATUS_LABELS = {
   parse_error:'PARSE ERR', timeout:'TIMEOUT', network_error:'NET ERR'
 };
 
+async function loadSearchQuotaSummary() {
+  try {
+    const res = await fetch('/search-quota/summary');
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d.enabled) {
+      $('searchQuotaSection').style.display = 'none';
+      return;
+    }
+    $('searchQuotaSection').style.display = '';
+    $('sqActiveCount').textContent = d.searchable || 0;
+    $('sqExcludedCount').textContent = (d.jsExcluded || 0) + (d.truncated || 0);
+
+    const tbody = $('sqTableBody');
+    let html = '';
+    html += '<tr><td>Total</td><td colspan="3">' + (d.totalSites || '-') + ' sites</td></tr>';
+    html += '<tr><td>JS excluded</td><td colspan="3">' + (d.jsExcluded || 0) + '</td></tr>';
+    html += '<tr><td>Pinned</td><td colspan="3">' + (d.pinnedCount || 0) + '</td></tr>';
+    if (d.truncated > 0) html += '<tr><td>Truncated</td><td colspan="3">' + d.truncated + '</td></tr>';
+    html += '<tr style="font-weight:600"><td>Searchable</td><td colspan="3">' + (d.searchable || 0) + '</td></tr>';
+    tbody.innerHTML = html;
+  } catch {}
+}
+function escDash(s) { const d = document.createElement('div'); d.textContent = s || '-'; return d.innerHTML; }
+
 async function loadSourceHealth() {
   try {
     const res = await fetch('/source-status');
@@ -610,6 +669,7 @@ applyTheme(getTheme());
 applyLang(translations, getLang());
 loadStatus();
 loadSourceHealth();
+loadSearchQuotaSummary();
 setInterval(loadStatus, 60000);
 setInterval(loadSourceHealth, 60000);
 </script>

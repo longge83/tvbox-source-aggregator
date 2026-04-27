@@ -48,7 +48,11 @@ export const DEFAULT_CRON_INTERVAL = 1440; // 默认每天一次
 // 边缘函数代理
 export const KV_EDGE_PROXIES = 'edge_proxies';
 
-// JAR 仓库
-export const KV_JAR_REGISTRY = 'jar_registry';
-export const KV_JAR_REGISTRY_ENABLED = 'jar_registry_enabled';
-export const KV_JAR_BIN_PREFIX = 'jar_bin:'; // JAR 二进制 base64 缓存
+// 网盘凭证
+export const KV_CLOUD_CREDENTIALS = 'cloud_credentials';
+export const KV_CREDENTIAL_POLICY = 'credential_policy';
+export const KV_CREDENTIAL_ENCRYPTION_KEY = 'credential_encryption_key';
+
+// 搜索配额
+export const KV_SEARCH_QUOTA = 'search_quota';
+export const KV_SEARCH_QUOTA_REPORT = 'search_quota_report';

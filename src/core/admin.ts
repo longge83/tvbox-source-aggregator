@@ -80,6 +80,86 @@ ${sharedStyles}
 
 .nt-textarea:focus{border-color:var(--green)}
 
+/* Cloud login cards */
+.cloud-card{
+  padding:12px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:6px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.cloud-card-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.cloud-card-name{
+  font-weight:600;
+  font-size:0.9rem;
+  color:var(--text-bright);
+}
+.cloud-badge{
+  font-family:var(--mono);
+  font-size:0.65rem;
+  padding:2px 8px;
+  border-radius:10px;
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+}
+.cloud-badge.valid{background:rgba(80,250,123,0.15);color:var(--green)}
+.cloud-badge.expired{background:rgba(255,85,85,0.15);color:var(--red)}
+.cloud-badge.none{background:rgba(136,136,136,0.15);color:var(--text-dim)}
+.cloud-card-actions{display:flex;gap:6px;flex-wrap:wrap}
+.cloud-card-time{font-family:var(--mono);font-size:0.7rem;color:var(--text-dim)}
+
+/* Risk badges */
+.risk-badge{
+  font-family:var(--mono);
+  font-size:0.7rem;
+  padding:1px 6px;
+  border-radius:8px;
+}
+.risk-badge.safe{background:rgba(80,250,123,0.15);color:var(--green)}
+.risk-badge.low{background:rgba(80,250,123,0.1);color:var(--green)}
+.risk-badge.high{background:rgba(255,85,85,0.15);color:var(--red)}
+.risk-badge.unaudited{background:rgba(241,250,140,0.15);color:var(--yellow)}
+
+/* QR modal */
+.qr-modal-overlay{
+  position:fixed;top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,0.7);
+  display:flex;align-items:center;justify-content:center;
+  z-index:1000;
+}
+.qr-modal{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:24px;
+  min-width:300px;
+  max-width:400px;
+  text-align:center;
+}
+.qr-modal h3{margin:0 0 16px;color:var(--text-bright);font-size:1rem}
+.qr-modal img{
+  max-width:250px;
+  max-height:250px;
+  border-radius:4px;
+  background:#fff;
+  padding:8px;
+}
+.qr-status{
+  margin-top:12px;
+  font-family:var(--mono);
+  font-size:0.8rem;
+  color:var(--text-dim);
+}
+.qr-status.scanned{color:var(--yellow)}
+.qr-status.confirmed{color:var(--green)}
+.qr-status.expired{color:var(--red)}
+
 /* Import textarea */
 .import-textarea{
   width:100%;
@@ -210,6 +290,8 @@ ${sharedStyles}
     <div class="tab active" data-tab="sources" onclick="switchTab('sources')"><span data-i18n="tabSources">Sources</span> <span class="badge" id="badgeSources">0</span></div>
     <div class="tab" data-tab="maccms" onclick="switchTab('maccms')"><span data-i18n="tabMacCMS">MacCMS</span> <span class="badge" id="badgeMacCMS">0</span></div>
     <div class="tab" data-tab="live" onclick="switchTab('live')"><span data-i18n="tabLive">Live</span> <span class="badge" id="badgeLive">0</span></div>
+    <div class="tab" data-tab="searchQuota" onclick="switchTab('searchQuota')" id="tabSearchQuota" style="display:none"><span data-i18n="tabSearchQuota">Search</span> <span class="badge" id="badgeSearchQuota">0</span></div>
+    <div class="tab" data-tab="cloud" onclick="switchTab('cloud')"><span data-i18n="tabCloud">Cloud</span></div>
     <div class="tab" data-tab="settings" onclick="switchTab('settings')"><span data-i18n="tabSettings">Settings</span></div>
   </div>
 
@@ -302,6 +384,68 @@ ${sharedStyles}
     </div>
   </div>
 
+  <!-- Search Quota Tab -->
+  <div class="tab-panel" id="panelSearchQuota">
+    <div class="section">
+      <div class="section-title" data-i18n="sqSelected">Active Search Sources</div>
+      <div id="sqSelectedInfo" style="margin-bottom:8px;font-size:0.8rem;color:var(--text-secondary)"></div>
+      <div id="sqSelectedTable" style="max-height:500px;overflow:auto">
+        <div style="color:var(--text-secondary);font-size:0.85rem" data-i18n="sqNoData">Run aggregation to see results</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cloud Tab -->
+  <div class="tab-panel" id="panelCloud">
+    <!-- 网盘登录 -->
+    <div class="section">
+      <div class="section-title" data-i18n="cloudLogin">Cloud Login</div>
+      <div id="cloudLoginGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+      </div>
+    </div>
+    <!-- 手动粘贴凭证 -->
+    <div class="section">
+      <div class="section-title" data-i18n="cloudManualPaste">Manual Credential Paste</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:0 0 140px">
+          <label class="form-label" data-i18n="cloudPlatform">Platform</label>
+          <select id="manualPlatform" class="nt-input" style="width:100%"></select>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <label class="form-label" data-i18n="cloudCredentialValue">Credential (cookie / token / JSON)</label>
+          <input id="manualCredValue" class="nt-input" style="width:100%" placeholder="cookie=xxx; token=yyy">
+        </div>
+        <button class="btn btn-sm" onclick="manualPasteCredential()" data-i18n="save">Save</button>
+      </div>
+      <div id="manualPasteStatus" class="status-text" style="margin-top:6px"></div>
+    </div>
+    <!-- 风险管理 -->
+    <div class="section">
+      <div class="section-title" data-i18n="cloudRiskManagement">Risk Management</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="loadRiskReport()" data-i18n="cloudLoadReport">Load Risk Report</button>
+        <span id="riskSummary" style="font-family:var(--mono);font-size:0.75rem;color:var(--text-dim)"></span>
+      </div>
+      <div id="riskReportContainer" style="display:none">
+        <div style="overflow-x:auto">
+          <table class="list-table" style="width:100%;font-size:0.8rem">
+            <thead>
+              <tr>
+                <th data-i18n="cloudRiskName">Name</th>
+                <th>Spider</th>
+                <th data-i18n="cloudRiskLevel">Risk</th>
+                <th data-i18n="cloudRiskPlatforms">Platforms</th>
+                <th data-i18n="cloudRiskDomains">3rd Party</th>
+                <th data-i18n="cloudRiskAction">Action</th>
+              </tr>
+            </thead>
+            <tbody id="riskReportBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Tab -->
   <div class="tab-panel" id="panelSettings">
     <!-- Cron Interval -->
@@ -352,24 +496,14 @@ ${sharedStyles}
     </div>
 
     <div class="section">
-      <div class="section-title" data-i18n="jarRegistry">JAR Registry</div>
+      <div class="section-title" data-i18n="searchQuota">Search Quota</div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="jarRegistryCheck" onchange="saveJarRegistryEnabled()">
-          <span data-i18n="jarRegistryLabel">Enable JAR registry analysis (precise class matching)</span>
-        </label>
-        <span class="status-text" id="jarRegistryStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
+        <label class="form-label" style="margin:0" data-i18n="maxSearchable">Max searchable</label>
+        <input type="number" id="maxSearchableInput" class="nt-input" style="width:80px" min="0" max="1000" value="0">
+        <button class="btn btn-sm" id="searchQuotaSaveBtn" onclick="saveSearchQuota()" data-i18n="save">Save</button>
+        <span class="status-text" id="searchQuotaStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
       </div>
-      <div style="margin-top:6px;font-size:0.8rem;color:var(--text-secondary)" data-i18n="jarRegistryDesc">Downloads JARs and parses DEX to extract class names for precise spider assignment</div>
-      <div id="jarRegistryInfo" style="margin-top:8px;font-size:0.8rem;color:var(--text-secondary)"></div>
-      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-sm" id="jarRefreshBtn" onclick="refreshJarRegistry(true)" data-i18n="refreshJarRegistry">Refresh JAR Registry</button>
-        <button class="btn btn-sm" onclick="toggleJarReport()" data-i18n="viewReport">View Report</button>
-        <span class="status-text" id="jarRefreshStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
-      </div>
-      <div id="jarReportPanel" style="display:none;margin-top:10px;padding:10px;background:var(--bg);border-radius:8px;font-size:0.8rem;max-height:400px;overflow:auto">
-        <div data-i18n="loading">Loading...</div>
-      </div>
+      <div style="margin-top:6px;font-size:0.8rem;color:var(--text-secondary)" data-i18n="searchQuotaDesc">Limit searchable sources to reduce TVBox crashes. 0 = unlimited. JS sources are always excluded. Manage pinned sources in the Search tab.</div>
     </div>
 
     <div class="section">
@@ -451,16 +585,20 @@ const translations = {
     cronInterval:'Aggregation Schedule',
     speedTestToggle:'Site Speed Test', speedTestLabel:'Enable site speed test and unreachable filtering', speedTestDesc:'When disabled, all sites are kept without testing reachability',
     edgeProxies:'Edge Function Proxies', edgeProxiesDesc:'Configure edge function URLs for proxy fallback (fetch retry + image CDN). Local Docker mode only.',
-    jarRegistry:'JAR Registry', jarRegistryLabel:'Enable JAR registry analysis (precise class matching)', jarRegistryDesc:'Downloads JARs and parses DEX to extract class names for precise spider assignment',
-    refreshJarRegistry:'Refresh JAR Registry', viewReport:'View Report', jarRegistryDisabled:'Not enabled',
-    jarCount:'JARs', totalClasses:'Total classes', lastScanned:'Last scanned',
-    globalSpider:'Global Spider', coveredSites:'Covered sites', orphanedSites:'Orphaned sites',
     refreshing:'Refreshing...', loading:'Loading...',
     cronEvery1h:'Every 1 hour', cronEvery3h:'Every 3 hours', cronEvery6h:'Every 6 hours',
     cronEvery12h:'Every 12 hours', cronEveryDay:'Once a day',
     save:'Save', saving:'Saving...', saved:'Saved', saveFailed:'Save failed',
     noHealthData:'No data yet', healthFails:'Fails',
     healthLastOk:'Last OK',
+    searchQuota:'Search Quota',
+    maxSearchable:'Max searchable', searchQuotaDesc:'Limit searchable sources to reduce TVBox crashes. 0 = unlimited. Manage pinned sources in the Search tab.',
+    tabSearchQuota:'Search',
+    sqSelected:'Active Search Sources', sqNoData:'Run aggregation to see results',
+    sqKey:'Key', sqName:'Name', sqSource:'Source', sqReason:'Reason', sqAction:'Action',
+    sqPin:'Pin', sqUnpin:'Unpin',
+    sqPinned:'Pinned', sqPinnedDesc:'Drag to reorder. Top sources are searched first in TVBox.', sqOtherSources:'Other Sources',
+    sqHttp:'http', sqMainJar:'main jar', sqIndepJar:'indep jar',
     footer:'TVBox Source Aggregator &middot; Admin Console',
   },
   zh: {
@@ -505,16 +643,20 @@ const translations = {
     cronInterval:'聚合频率',
     speedTestToggle:'站点测速', speedTestLabel:'启用站点测速与不可达剔除', speedTestDesc:'关闭后保留所有站点，不进行可达性检测',
     edgeProxies:'边缘函数代理', edgeProxiesDesc:'配置边缘函数 URL，用于本地 Docker 模式的请求代理回退和图片 CDN 加速',
-    jarRegistry:'JAR 仓库', jarRegistryLabel:'启用 JAR 仓库分析（精确匹配类名）', jarRegistryDesc:'启用后聚合时会下载 JAR 并解析 DEX 提取类名，用于精确分配 spider',
-    refreshJarRegistry:'刷新 JAR 仓库', viewReport:'查看报告', jarRegistryDisabled:'未启用',
-    jarCount:'JAR 数量', totalClasses:'总类名', lastScanned:'上次扫描',
-    globalSpider:'全局 Spider', coveredSites:'覆盖站点', orphanedSites:'孤立站点',
     refreshing:'刷新中...', loading:'加载中...',
     cronEvery1h:'每 1 小时', cronEvery3h:'每 3 小时', cronEvery6h:'每 6 小时',
     cronEvery12h:'每 12 小时', cronEveryDay:'每天一次',
     save:'保存', saving:'保存中...', saved:'已保存', saveFailed:'保存失败',
     noHealthData:'暂无数据', healthFails:'失败',
     healthLastOk:'最后成功',
+    searchQuota:'搜索配额',
+    maxSearchable:'可搜索源上限', searchQuotaDesc:'限制可搜索源数量，减少 TVBox 搜索崩溃。0 = 不限制。置顶源在搜索页签管理。',
+    tabSearchQuota:'搜索',
+    sqSelected:'活跃搜索源', sqNoData:'执行聚合后查看结果',
+    sqKey:'Key', sqName:'名称', sqSource:'来源', sqReason:'原因', sqAction:'操作',
+    sqPin:'置顶', sqUnpin:'取消置顶',
+    sqPinned:'置顶源', sqPinnedDesc:'上下移动排序，排在前面的源在 TVBox 搜索时优先执行', sqOtherSources:'其他源',
+    sqHttp:'HTTP', sqMainJar:'主 JAR', sqIndepJar:'独立 JAR',
     footer:'TVBox 源聚合器 &middot; 管理控制台',
   }
 };
@@ -565,7 +707,8 @@ async function loadAll() {
   loadCronInterval();
   loadSpeedTest();
   loadEdgeProxies();
-  loadJarRegistry();
+  loadSearchQuota();
+  loadCloudCredentials();
 }
 
 async function loadStatus() {
@@ -1078,40 +1221,33 @@ async function saveEdgeProxies() {
   setTimeout(() => { status.textContent = ''; }, 3000);
 }
 
-// --- JAR Registry ---
-async function loadJarRegistry() {
+
+// --- Search Quota ---
+let sqPinnedKeys = new Set();
+
+async function loadSearchQuota() {
   try {
-    const res = await auth.authFetch('/admin/jar-registry/enabled');
-    if (res.ok) {
-      const d = await res.json();
-      $('jarRegistryCheck').checked = d.enabled;
-    }
-  } catch {}
-  try {
-    const res = await auth.authFetch('/admin/jar-registry');
-    if (res.ok) {
-      const d = await res.json();
-      const info = $('jarRegistryInfo');
-      if (d.updatedAt) {
-        const jarCount = Object.keys(d.jars).length;
-        const okCount = Object.values(d.jars).filter(j => j.status === 'ok').length;
-        const totalClasses = Object.values(d.jars).reduce((s, j) => s + (j.classes?.length || 0), 0);
-        info.innerHTML = t('jarCount') + ': ' + okCount + '/' + jarCount + ' ok | ' + t('totalClasses') + ': ' + totalClasses + ' | ' + t('lastScanned') + ': ' + new Date(d.updatedAt).toLocaleString();
-      } else {
-        info.textContent = t('jarRegistryDisabled');
-      }
-    }
+    const res = await auth.authFetch('/admin/search-quota');
+    if (!res.ok) return;
+    const d = await res.json();
+    $('maxSearchableInput').value = d.maxSearchable;
+    sqPinnedKeys = new Set(d.pinnedKeys || []);
+    loadSearchQuotaReport();
   } catch {}
 }
 
-async function saveJarRegistryEnabled() {
-  const status = $('jarRegistryStatus');
-  const enabled = $('jarRegistryCheck').checked;
+async function saveSearchQuota() {
+  const status = $('searchQuotaStatus');
+  status.textContent = '';
+  const data = {
+    maxSearchable: parseInt($('maxSearchableInput').value) || 0,
+    pinnedKeys: [...sqPinnedKeys],
+  };
   try {
-    const res = await auth.authFetch('/admin/jar-registry/enabled', {
+    const res = await auth.authFetch('/admin/search-quota', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled })
+      body: JSON.stringify(data),
     });
     if (res.ok) {
       status.textContent = t('saved');
@@ -1127,84 +1263,108 @@ async function saveJarRegistryEnabled() {
   setTimeout(() => { status.textContent = ''; }, 3000);
 }
 
-async function refreshJarRegistry(reset) {
-  const btn = $('jarRefreshBtn');
-  const status = $('jarRefreshStatus');
-  btn.disabled = true;
-  btn.textContent = t('refreshing');
-  btn.className = 'btn btn-sm loading';
-  status.textContent = '';
+async function loadSearchQuotaReport() {
+  try {
+    const res = await auth.authFetch('/admin/search-quota/report');
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.searchable == null) return;
 
-  let round = 0;
-  let lastOk = 0;
-  let done = false;
-  const body = round === 0 && reset ? JSON.stringify({ reset: true }) : '{}';
+    // 显示 Search 页签
+    $('tabSearchQuota').style.display = '';
+    $('sqSelectedInfo').textContent = d.totalSites + ' sites → ' + d.jsExcluded + ' JS excluded → ' + d.searchable + ' searchable' + (d.truncated > 0 ? ' (' + d.truncated + ' truncated)' : '') + (d.pinnedCount > 0 ? ', ' + d.pinnedCount + ' pinned' : '');
+    $('badgeSearchQuota').textContent = d.searchable;
 
-  while (!done) {
-    round++;
-    try {
-      const res = await auth.authFetch('/admin/jar-registry/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: round === 1 && reset ? JSON.stringify({ reset: true }) : '{}'
-      });
-      const d = await res.json();
-      if (!res.ok || !d.success) {
-        status.textContent = d.error || t('saveFailed');
-        status.className = 'status-text error';
-        break;
-      }
-      lastOk = d.okCount;
-      done = d.done;
-      status.textContent = d.okCount + '/' + d.total + ' JARs (' + d.totalClasses + ' classes)' + (done ? '' : ' ...');
-      status.className = 'status-text success';
-      btn.textContent = t('refreshing') + ' ' + d.okCount + '/' + d.total;
-    } catch {
-      status.textContent = t('networkError');
-      status.className = 'status-text error';
-      break;
-    }
-  }
-
-  btn.disabled = false;
-  btn.textContent = t('refreshJarRegistry');
-  btn.className = 'btn btn-sm';
-  loadJarRegistry();
-  if (done) setTimeout(() => { status.textContent = ''; }, 8000);
+    // 加载站点列表
+    const cfgRes = await fetch('/');
+    if (!cfgRes.ok) return;
+    const cfg = await cfgRes.json();
+    const allSites = (cfg.sites || []).filter(s => s.searchable === 1);
+    sqAllSites = allSites;
+    renderSearchSources();
+  } catch {}
 }
 
-async function toggleJarReport() {
-  const panel = $('jarReportPanel');
-  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
-  panel.innerHTML = '<div>' + t('loading') + '</div>';
-  try {
-    const res = await auth.authFetch('/admin/jar-registry/report');
-    if (!res.ok) { const d = await res.json(); panel.innerHTML = '<div style="color:var(--red)">' + (d.error || 'Error') + '</div>'; return; }
-    const d = await res.json();
-    let html = '<div style="margin-bottom:8px"><strong>' + t('globalSpider') + ':</strong> ' + (d.globalSpider ? d.globalSpider.substring(0, 60) + '...' : 'N/A') + '</div>';
-    html += '<div style="margin-bottom:8px">' + t('coveredSites') + ': <span style="color:var(--green)">' + (d.stats?.coveredByGlobal || 0) + '</span> global + <span style="color:var(--amber)">' + (d.stats?.coveredByPerSite || 0) + '</span> per-site | ' + t('orphanedSites') + ': <span style="color:var(--red)">' + (d.stats?.orphaned || 0) + '</span> | URL api: ' + (d.stats?.urlBasedApi || 0) + '</div>';
-    if (d.jars?.length) {
-      html += '<table style="width:100%;border-collapse:collapse;font-size:0.75rem"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px">JAR</th><th>Classes</th><th>Size</th><th>Status</th></tr>';
-      for (const j of d.jars) {
-        const statusColor = j.status === 'ok' ? 'var(--green)' : 'var(--red)';
-        html += '<tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + j.url + '">' + (j.isGlobal ? '★ ' : '') + j.url.substring(0, 40) + '...</td><td style="text-align:center">' + j.classCount + '</td><td style="text-align:center">' + (j.sizeBytes ? (j.sizeBytes / 1024 / 1024).toFixed(1) + 'MB' : '-') + '</td><td style="text-align:center;color:' + statusColor + '">' + j.status + '</td></tr>';
-      }
-      html += '</table>';
-    }
-    if (d.orphanedSites?.length) {
-      html += '<div style="margin-top:8px"><strong>' + t('orphanedSites') + ' (' + d.orphanedSites.length + '):</strong></div>';
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);max-height:150px;overflow:auto">';
-      for (const o of d.orphanedSites.slice(0, 50)) {
-        html += '<div>' + o.key + ' → csp_' + o.neededClass + '</div>';
-      }
-      if (d.orphanedSites.length > 50) html += '<div>... +' + (d.orphanedSites.length - 50) + ' more</div>';
-      html += '</div>';
-    }
-    panel.innerHTML = html;
-  } catch {
-    panel.innerHTML = '<div style="color:var(--red)">' + t('networkError') + '</div>';
+let sqAllSites = [];
+
+function renderSearchSources() {
+  const pinnedArr = [...sqPinnedKeys];
+  const siteMap = new Map(sqAllSites.map(s => [s.key, s]));
+  let html = '';
+
+  // 1. Pinned 源（有序，可排序）
+  if (pinnedArr.length > 0) {
+    html += '<div style="margin-bottom:12px"><strong style="color:var(--primary)">' + t('sqPinned') + ' (' + pinnedArr.length + ')</strong>';
+    html += ' <span style="font-size:0.75rem;color:var(--text-secondary)">— ' + t('sqPinnedDesc') + '</span></div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:0.8rem">';
+    pinnedArr.forEach((key, i) => {
+      const s = siteMap.get(key);
+      const name = s ? (s.name || s.key) : key;
+      html += '<tr style="border-bottom:1px solid var(--border);background:var(--bg-hover)">';
+      html += '<td style="padding:4px;width:30px;color:var(--text-secondary)">' + (i + 1) + '</td>';
+      html += '<td style="padding:4px;font-family:var(--mono);font-size:0.75rem">' + escHtml(key) + '</td>';
+      html += '<td style="padding:4px">' + escHtml(name) + '</td>';
+      html += '<td style="padding:4px;width:100px;text-align:right;white-space:nowrap">';
+      if (i > 0) html += '<button class="btn btn-sm" style="padding:1px 6px;font-size:0.7rem" onclick="movePinned(' + i + ',-1)">▲</button> ';
+      if (i < pinnedArr.length - 1) html += '<button class="btn btn-sm" style="padding:1px 6px;font-size:0.7rem" onclick="movePinned(' + i + ',1)">▼</button> ';
+      html += '<button class="btn btn-sm" style="padding:1px 6px;font-size:0.7rem;color:var(--red)" onclick="togglePin(&quot;' + escHtml(key) + '&quot;)">' + t('sqUnpin') + '</button>';
+      html += '</td></tr>';
+    });
+    html += '</table>';
   }
+
+  // 2. 其他源（可 pin）
+  const unpinned = sqAllSites.filter(s => !sqPinnedKeys.has(s.key));
+  html += '<div style="margin-top:16px;margin-bottom:8px"><strong>' + t('sqOtherSources') + ' (' + unpinned.length + ')</strong></div>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:0.8rem">';
+  unpinned.slice(0, 200).forEach(s => {
+    html += '<tr style="border-bottom:1px solid var(--border)">';
+    html += '<td style="padding:4px;font-family:var(--mono);font-size:0.75rem">' + escHtml(s.key) + '</td>';
+    html += '<td style="padding:4px">' + escHtml(s.name || s.key) + '</td>';
+    html += '<td style="padding:4px;width:50px;text-align:right"><button class="btn btn-sm" style="padding:1px 6px;font-size:0.7rem" onclick="togglePin(&quot;' + escHtml(s.key) + '&quot;)">' + t('sqPin') + '</button></td>';
+    html += '</tr>';
+  });
+  if (unpinned.length > 200) html += '<tr><td colspan="3" style="padding:4px;color:var(--text-secondary)">... +' + (unpinned.length - 200) + ' more</td></tr>';
+  html += '</table>';
+
+  $('sqSelectedTable').innerHTML = html;
+}
+
+async function movePinned(index, direction) {
+  const arr = [...sqPinnedKeys];
+  const target = index + direction;
+  if (target < 0 || target >= arr.length) return;
+  [arr[index], arr[target]] = [arr[target], arr[index]];
+  try {
+    const res = await auth.authFetch('/admin/search-quota/pinned', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: arr }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      sqPinnedKeys = new Set(d.pinnedKeys);
+      renderSearchSources();
+    }
+  } catch {}
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function togglePin(key) {
+  const isPinned = sqPinnedKeys.has(key);
+  try {
+    const res = await auth.authFetch('/admin/search-quota/pinned', {
+      method: isPinned ? 'DELETE' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [key] }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      sqPinnedKeys = new Set(d.pinnedKeys);
+      renderSearchSources();
+    }
+  } catch {}
 }
 
 // --- Refresh ---
@@ -1230,6 +1390,302 @@ async function triggerRefresh() {
     btn.textContent = t('refresh');
     btn.className = 'btn btn-sm';
   }, 3000);
+}
+
+// --- Cloud Credentials ---
+const PLATFORM_NAMES = {
+  aliyun:'阿里云盘', bilibili:'Bilibili', quark:'夸克网盘', uc:'UC 网盘',
+  pan115:'115 网盘', tianyi:'天翼云盘', baidu:'百度网盘', pan123:'123 网盘',
+  thunder:'迅雷', pikpak:'PikPak'
+};
+const QR_PLATFORMS = ['bilibili','aliyun','quark','uc','pan115','tianyi','baidu','pan123'];
+const PW_PLATFORMS = ['thunder','pikpak'];
+let cloudCredentials = {};
+
+async function loadCloudCredentials() {
+  try {
+    const res = await auth.authFetch('/admin/cloud-credentials');
+    if (!res.ok) return;
+    const data = await res.json();
+    cloudCredentials = data.credentials || {};
+    renderCloudCards();
+    renderPlatformSelect();
+  } catch {}
+}
+
+function renderCloudCards() {
+  const grid = $('cloudLoginGrid');
+  grid.innerHTML = '';
+  const allPlatforms = [...QR_PLATFORMS, ...PW_PLATFORMS];
+
+  for (const p of allPlatforms) {
+    const cred = cloudCredentials[p];
+    const isLoggedIn = cred && cred.hasCredential;
+    const statusClass = isLoggedIn ? (cred.status === 'expired' ? 'expired' : 'valid') : 'none';
+    const statusText = isLoggedIn ? (cred.status === 'expired' ? 'EXPIRED' : 'ACTIVE') : 'NOT SET';
+    const isQR = QR_PLATFORMS.includes(p);
+    const timeStr = cred?.obtainedAt ? new Date(cred.obtainedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '';
+
+    const card = document.createElement('div');
+    card.className = 'cloud-card';
+    card.innerHTML =
+      '<div class="cloud-card-header">' +
+        '<span class="cloud-card-name">' + (PLATFORM_NAMES[p]||p) + '</span>' +
+        '<span class="cloud-badge ' + statusClass + '">' + statusText + '</span>' +
+      '</div>' +
+      (timeStr ? '<div class="cloud-card-time">' + timeStr + '</div>' : '') +
+      '<div class="cloud-card-actions">' +
+        (isQR ? '<button class="btn btn-sm" onclick="startQRLogin(\\''+p+'\\')">Scan QR</button>' :
+                '<button class="btn btn-sm" onclick="showPasswordLogin(\\''+p+'\\')">Login</button>') +
+        (isLoggedIn ? '<button class="btn btn-sm btn-danger" onclick="logoutPlatform(\\''+p+'\\')">Logout</button>' : '') +
+      '</div>';
+    grid.appendChild(card);
+  }
+}
+
+function renderPlatformSelect() {
+  const sel = $('manualPlatform');
+  sel.innerHTML = '';
+  for (const [k,v] of Object.entries(PLATFORM_NAMES)) {
+    const opt = document.createElement('option');
+    opt.value = k; opt.textContent = v;
+    sel.appendChild(opt);
+  }
+}
+
+let qrPollTimer = null;
+
+async function startQRLogin(platform) {
+  try {
+    const res = await auth.authFetch('/admin/cloud-login/' + platform + '/qr', { method: 'POST' });
+    if (!res.ok) { const e = await res.json(); toast(e.error || 'QR failed', 'error'); return; }
+    const data = await res.json();
+    showQRModal(platform, data.qrUrl, data.token);
+  } catch (e) {
+    toast('QR generate failed: ' + e.message, 'error');
+  }
+}
+
+function showQRModal(platform, qrUrl, token) {
+  closeQRModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'qr-modal-overlay';
+  overlay.id = 'qrModalOverlay';
+  overlay.onclick = function(e) { if(e.target===overlay) closeQRModal(); };
+
+  const qrImgUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=' + encodeURIComponent(qrUrl);
+
+  overlay.innerHTML =
+    '<div class="qr-modal">' +
+    '<h3>' + (PLATFORM_NAMES[platform]||platform) + ' - Scan QR</h3>' +
+    '<img src="' + qrImgUrl + '" alt="QR Code" onerror="this.alt=\\'QR: '+qrUrl.substring(0,60)+'...\\'">' +
+    '<div class="qr-status" id="qrPollStatus">Waiting for scan...</div>' +
+    '<div style="margin-top:14px;display:flex;gap:8px;justify-content:center">' +
+    '<button class="btn btn-sm" onclick="closeQRModal()">Cancel</button>' +
+    '</div></div>';
+
+  document.body.appendChild(overlay);
+  startQRPolling(platform, token);
+}
+
+function startQRPolling(platform, token) {
+  if (qrPollTimer) clearInterval(qrPollTimer);
+  let attempts = 0;
+  const maxAttempts = 120; // 4 minutes at 2s intervals
+
+  qrPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) { closeQRModal(); toast('QR expired', 'error'); return; }
+
+    try {
+      const res = await auth.authFetch('/admin/cloud-login/' + platform + '/poll?token=' + encodeURIComponent(token));
+      const data = await res.json();
+      const statusEl = $('qrPollStatus');
+      if (!statusEl) { clearInterval(qrPollTimer); return; }
+
+      if (data.status === 'confirmed') {
+        statusEl.className = 'qr-status confirmed';
+        statusEl.textContent = 'Login successful!';
+        clearInterval(qrPollTimer);
+        setTimeout(() => { closeQRModal(); loadCloudCredentials(); toast(PLATFORM_NAMES[platform] + ' logged in', 'success'); }, 1000);
+      } else if (data.status === 'scanned') {
+        statusEl.className = 'qr-status scanned';
+        statusEl.textContent = 'Scanned, waiting for confirmation...';
+      } else if (data.status === 'expired') {
+        statusEl.className = 'qr-status expired';
+        statusEl.textContent = 'QR expired. Close and try again.';
+        clearInterval(qrPollTimer);
+      } else if (data.status === 'error') {
+        statusEl.className = 'qr-status expired';
+        statusEl.textContent = data.message || 'Error';
+        clearInterval(qrPollTimer);
+      }
+    } catch {}
+  }, 2000);
+}
+
+function closeQRModal() {
+  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  const overlay = $('qrModalOverlay');
+  if (overlay) overlay.remove();
+}
+
+async function showPasswordLogin(platform) {
+  const username = prompt(PLATFORM_NAMES[platform] + ' - Username/Email:');
+  if (!username) return;
+  const password = prompt(PLATFORM_NAMES[platform] + ' - Password:');
+  if (!password) return;
+
+  try {
+    const res = await auth.authFetch('/admin/cloud-login/' + platform + '/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast(PLATFORM_NAMES[platform] + ' saved', 'success');
+      loadCloudCredentials();
+    } else {
+      toast(data.message || 'Login failed', 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function logoutPlatform(platform) {
+  if (!confirm('Logout ' + (PLATFORM_NAMES[platform]||platform) + '?')) return;
+  try {
+    const res = await auth.authFetch('/admin/cloud-credentials/' + platform, { method: 'DELETE' });
+    if (res.ok) {
+      toast('Logged out', 'success');
+      loadCloudCredentials();
+    }
+  } catch {}
+}
+
+async function manualPasteCredential() {
+  const platform = $('manualPlatform').value;
+  const rawValue = $('manualCredValue').value.trim();
+  if (!rawValue) { toast('Please enter credential value', 'error'); return; }
+
+  // 智能解析：尝试 JSON，否则按 cookie string 处理
+  let credential;
+  try {
+    credential = JSON.parse(rawValue);
+    if (typeof credential !== 'object') throw 0;
+  } catch {
+    // 账号密码平台
+    if (PW_PLATFORMS.includes(platform) && rawValue.includes(':')) {
+      const [u, ...rest] = rawValue.split(':');
+      credential = { username: u, password: rest.join(':') };
+    } else {
+      credential = { cookie: rawValue };
+    }
+  }
+
+  try {
+    const res = await auth.authFetch('/admin/cloud-credentials/' + platform, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential }),
+    });
+    if (res.ok) {
+      $('manualCredValue').value = '';
+      toast(PLATFORM_NAMES[platform] + ' saved', 'success');
+      loadCloudCredentials();
+    } else {
+      const e = await res.json();
+      toast(e.error || 'Save failed', 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+// --- Risk Report ---
+async function loadRiskReport() {
+  const container = $('riskReportContainer');
+  const summary = $('riskSummary');
+
+  try {
+    const res = await auth.authFetch('/admin/credential-risk-report');
+    if (!res.ok) { const e = await res.json(); toast(e.error || 'Failed', 'error'); return; }
+    const data = await res.json();
+
+    summary.textContent = 'Safe: ' + data.summary.safe + ' | Low: ' + data.summary.low +
+      ' | High: ' + data.summary.high + ' | Unaudited: ' + data.summary.unaudited;
+
+    const tbody = $('riskReportBody');
+    tbody.innerHTML = '';
+
+    // 只显示需要凭证的源（非 safe-A 类）
+    const relevant = data.assessments.filter(a => a.neededPlatforms.length > 0 || a.riskLevel !== 'safe');
+    const allowedSet = new Set(data.policy.allowedHighRiskKeys || []);
+    const deniedSet = new Set(data.policy.deniedKeys || []);
+
+    for (const a of relevant) {
+      const tr = document.createElement('tr');
+      const isAllowed = allowedSet.has(a.siteKey);
+      const isDenied = deniedSet.has(a.siteKey);
+      const needsAction = a.riskLevel === 'high' || a.riskLevel === 'unaudited';
+
+      tr.innerHTML =
+        '<td style="font-size:0.75rem">' + a.siteKey + '</td>' +
+        '<td style="font-family:var(--mono);font-size:0.7rem">' + a.api + '</td>' +
+        '<td><span class="risk-badge ' + a.riskLevel + '">' + a.riskLevel.toUpperCase() + '</span></td>' +
+        '<td style="font-size:0.7rem">' + (a.neededPlatforms||[]).join(', ') + '</td>' +
+        '<td style="font-size:0.7rem;color:' + (a.thirdPartyDomains.length ? 'var(--red)' : 'var(--text-dim)') + '">' +
+          (a.thirdPartyDomains.join(', ') || '-') + '</td>' +
+        '<td>' +
+          (needsAction && !isAllowed ? '<button class="btn btn-sm" onclick="allowHighRisk(\\''+a.siteKey+'\\')">Allow</button>' : '') +
+          (isAllowed ? '<button class="btn btn-sm btn-danger" onclick="revokeHighRisk(\\''+a.siteKey+'\\')">Revoke</button>' : '') +
+          (isDenied ? '<span style="color:var(--red);font-size:0.7rem">DENIED</span>' : '') +
+        '</td>';
+      tbody.appendChild(tr);
+    }
+
+    container.style.display = 'block';
+  } catch (e) {
+    toast('Load failed: ' + e.message, 'error');
+  }
+}
+
+async function allowHighRisk(siteKey) {
+  if (!confirm('Allow credential injection for "' + siteKey + '"? Your cookies may be sent to third-party servers.')) return;
+  try {
+    const res = await auth.authFetch('/admin/credential-policy');
+    const policy = await res.json();
+    if (!policy.allowedHighRiskKeys) policy.allowedHighRiskKeys = [];
+    if (!policy.allowedHighRiskKeys.includes(siteKey)) policy.allowedHighRiskKeys.push(siteKey);
+    await auth.authFetch('/admin/credential-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy),
+    });
+    loadRiskReport();
+    toast('Allowed: ' + siteKey, 'success');
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function revokeHighRisk(siteKey) {
+  try {
+    const res = await auth.authFetch('/admin/credential-policy');
+    const policy = await res.json();
+    policy.allowedHighRiskKeys = (policy.allowedHighRiskKeys||[]).filter(k => k !== siteKey);
+    await auth.authFetch('/admin/credential-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy),
+    });
+    loadRiskReport();
+    toast('Revoked: ' + siteKey, 'success');
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 applyTheme(getTheme());

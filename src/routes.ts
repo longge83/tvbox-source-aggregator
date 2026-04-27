@@ -3,18 +3,22 @@
 import { Hono } from 'hono';
 import type { Storage } from './storage/interface';
 import type { AppConfig, SourceEntry, MacCMSSourceEntry, LiveSourceEntry, NameTransformConfig } from './core/types';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_MANUAL_SOURCES, KV_LAST_UPDATE, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, LIVE_PROXY_TTL, IMG_PROXY_TTL, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_CRON_INTERVAL, DEFAULT_CRON_INTERVAL, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_JAR_REGISTRY_ENABLED, KV_JAR_REGISTRY, KV_JAR_BIN_PREFIX, KV_EDGE_PROXIES } from './core/config';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_MANUAL_SOURCES, KV_LAST_UPDATE, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, LIVE_PROXY_TTL, IMG_PROXY_TTL, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_CRON_INTERVAL, DEFAULT_CRON_INTERVAL, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT } from './core/config';
 import { parseConfigJson, isMultiRepoConfig, extractMultiRepoEntries } from './core/fetcher';
 import { decodeConfigResponse } from './core/decoder';
 import { validateMacCMS } from './core/maccms';
 import { lookupJarUrl, isMd5Key, base64ToUint8Array } from './core/jar-proxy';
-import { loadJarRegistry, buildJarRegistry, assignJars, buildJarStorageAdapter } from './core/jar-registry';
 import { lookupLiveUrl } from './core/live-source';
 import { adminHtml } from './core/admin';
 import { dashboardHtml } from './core/dashboard';
 import { configEditorHtml } from './core/config-editor';
 import { siteFingerprint, loadBlacklist, saveBlacklist } from './core/blacklist';
-import type { TVBoxConfig } from './core/types';
+import { loadSearchQuota, saveSearchQuota } from './core/search-quota';
+import { loadCredentials, saveCredential, deleteCredential, loadCredentialPolicy, saveCredentialPolicy } from './core/credential-store';
+import { generateQR, pollQRStatus, passwordLogin, PLATFORM_NAMES, QR_PLATFORMS, PASSWORD_PLATFORMS } from './core/cloud-login';
+import { assessAllSources } from './core/credential-risk';
+import { generateTokenJson } from './core/credential-injector';
+import type { TVBoxConfig, SearchQuotaConfig, CloudPlatform, CloudCredential } from './core/types';
 
 export interface AppDeps {
   storage: Storage;
@@ -456,108 +460,253 @@ export function createApp(deps: AppDeps): Hono {
     });
   }
 
-  // ─── JAR 仓库 Admin API ──────────────────────────────
-  app.get('/admin/jar-registry/enabled', async (c) => {
+  // ─── 搜索配额管理 ──────────────────────────────────────
+  app.get('/admin/search-quota', async (c) => {
     if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
-    const raw = await storage.get(KV_JAR_REGISTRY_ENABLED);
-    return c.json({ enabled: raw === 'true' });
+    const quota = await loadSearchQuota(storage);
+    return c.json(quota);
   });
 
-  app.put('/admin/jar-registry/enabled', async (c) => {
+  app.put('/admin/search-quota', async (c) => {
     if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
-    let body: { enabled?: boolean };
+    let body: Partial<SearchQuotaConfig>;
     try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
-    if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled must be a boolean' }, 400);
-    await storage.put(KV_JAR_REGISTRY_ENABLED, String(body.enabled));
-    return c.json({ success: true, enabled: body.enabled });
+
+    const current = await loadSearchQuota(storage);
+    if (typeof body.maxSearchable === 'number') current.maxSearchable = body.maxSearchable;
+    if (Array.isArray(body.pinnedKeys)) current.pinnedKeys = body.pinnedKeys;
+
+    await saveSearchQuota(storage, current);
+    return c.json({ success: true, ...current });
   });
 
-  app.get('/admin/jar-registry', async (c) => {
+  app.post('/admin/search-quota/pinned', async (c) => {
     if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
-    const registry = await loadJarRegistry(storage);
-    return c.json(registry || { version: 1, updatedAt: null, jars: {} });
+    let body: { keys?: string[] };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+    if (!Array.isArray(body.keys)) return c.json({ error: 'keys must be an array' }, 400);
+
+    const current = await loadSearchQuota(storage);
+    const set = new Set(current.pinnedKeys);
+    for (const key of body.keys) set.add(key);
+    current.pinnedKeys = [...set];
+    await saveSearchQuota(storage, current);
+    return c.json({ success: true, pinnedKeys: current.pinnedKeys });
   });
 
-  app.get('/admin/jar-registry/report', async (c) => {
+  // 重排 pinned 顺序（整体替换）
+  app.put('/admin/search-quota/pinned', async (c) => {
     if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
-    const registry = await loadJarRegistry(storage);
-    if (!registry) return c.json({ error: 'No JAR registry. Enable and refresh first.' }, 404);
+    let body: { keys?: string[] };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+    if (!Array.isArray(body.keys)) return c.json({ error: 'keys must be an array' }, 400);
 
-    const configRaw = await storage.get(KV_MERGED_CONFIG_FULL);
-    if (!configRaw) return c.json({ error: 'No merged config available' }, 404);
-
-    // 构造 SourcedConfig[] 用于 assignJars
-    const mergedConfig: TVBoxConfig = JSON.parse(configRaw);
-    const fakeSourced = [{ sourceUrl: 'merged', sourceName: 'merged', config: mergedConfig }];
-    const assignment = assignJars(registry, fakeSourced);
-
-    const jarSummaries = Object.values(registry.jars).map((j) => ({
-      url: j.url,
-      status: j.status,
-      classCount: j.classes.length,
-      sizeBytes: j.sizeBytes,
-      lastFetchedAt: j.lastFetchedAt,
-      errorMessage: j.errorMessage,
-      isGlobal: j.url === assignment.globalSpiderUrl,
-    }));
-
-    const orphanedList = Array.from(assignment.orphanedKeys).map((dk) => {
-      const [key, api] = dk.split('|');
-      return { key, api, neededClass: api?.startsWith('csp_') ? api.substring(4) : api };
-    });
-
-    return c.json({
-      globalSpider: assignment.globalSpiderUrl,
-      stats: assignment.stats,
-      jars: jarSummaries.sort((a, b) => b.classCount - a.classCount),
-      orphanedSites: orphanedList,
-    });
+    const current = await loadSearchQuota(storage);
+    current.pinnedKeys = body.keys;
+    await saveSearchQuota(storage, current);
+    return c.json({ success: true, pinnedKeys: current.pinnedKeys });
   });
 
-  app.post('/admin/jar-registry/refresh', async (c) => {
+  app.delete('/admin/search-quota/pinned', async (c) => {
     if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    let body: { keys?: string[] };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+    if (!Array.isArray(body.keys)) return c.json({ error: 'keys must be an array' }, 400);
+
+    const current = await loadSearchQuota(storage);
+    const removeSet = new Set(body.keys);
+    current.pinnedKeys = current.pinnedKeys.filter(k => !removeSet.has(k));
+    await saveSearchQuota(storage, current);
+    return c.json({ success: true, pinnedKeys: current.pinnedKeys });
+  });
+
+  // 报告（admin 需鉴权）
+  app.get('/admin/search-quota/report', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const raw = await storage.get(KV_SEARCH_QUOTA_REPORT);
+    if (!raw) return c.json({ error: 'No report yet. Run aggregation first.' }, 404);
+    return c.json(JSON.parse(raw));
+  });
+
+  // 报告精简版（dashboard 无需鉴权）
+  app.get('/search-quota/summary', async (c) => {
+    const raw = await storage.get(KV_SEARCH_QUOTA_REPORT);
+    if (!raw) return c.json({ enabled: false });
+    return c.json({ enabled: true, ...JSON.parse(raw) });
+  });
+
+  // ─── 网盘凭证管理 API ───────────────────────────────────
+
+  // 查看所有已登录平台状态
+  app.get('/admin/cloud-credentials', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const creds = await loadCredentials(storage);
+    const result: Record<string, any> = {};
+    for (const [platform, cred] of creds) {
+      result[platform] = {
+        platform: cred.platform,
+        status: cred.status,
+        obtainedAt: cred.obtainedAt,
+        expiresAt: cred.expiresAt,
+        hasCredential: Object.keys(cred.credential).length > 0,
+      };
+    }
+    return c.json({ platforms: PLATFORM_NAMES, credentials: result });
+  });
+
+  // 注销指定平台
+  app.delete('/admin/cloud-credentials/:platform', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const platform = c.req.param('platform') as CloudPlatform;
+    if (!PLATFORM_NAMES[platform]) return c.json({ error: 'Unknown platform' }, 400);
+    await deleteCredential(storage, platform);
+    return c.json({ success: true });
+  });
+
+  // 手动粘贴凭证
+  app.post('/admin/cloud-credentials/:platform', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const platform = c.req.param('platform') as CloudPlatform;
+    if (!PLATFORM_NAMES[platform]) return c.json({ error: 'Unknown platform' }, 400);
+
+    let body: { credential?: Record<string, string> };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+    if (!body.credential || typeof body.credential !== 'object') {
+      return c.json({ error: 'credential object is required' }, 400);
+    }
+
+    const cred: CloudCredential = {
+      platform,
+      credential: body.credential,
+      obtainedAt: new Date().toISOString(),
+      status: 'valid',
+    };
+    await saveCredential(storage, cred);
+    return c.json({ success: true });
+  });
+
+  // 生成二维码
+  app.post('/admin/cloud-login/:platform/qr', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const platform = c.req.param('platform') as CloudPlatform;
+    if (!QR_PLATFORMS.includes(platform)) {
+      return c.json({ error: `Platform ${platform} does not support QR login` }, 400);
+    }
 
     try {
-    let body: { reset?: boolean } = {};
-    try { body = await c.req.json(); } catch { /* no body is fine */ }
-
-    const configRaw = await storage.get(KV_MERGED_CONFIG_FULL);
-    if (!configRaw) return c.json({ error: 'No merged config. Run aggregation first.' }, 404);
-
-    const mergedConfig: TVBoxConfig = JSON.parse(configRaw);
-    const fakeSourced = [{ sourceUrl: 'merged', sourceName: 'merged', config: mergedConfig }];
-
-    // reset=true 时清除旧 registry 强制全部重下载
-    if (body.reset) {
-      await storage.put(KV_JAR_REGISTRY, '');
-    }
-
-    // refresh 只解析类名，不存 JAR 二进制（省 CPU，二进制存储由聚合流程处理）
-    const BATCH_SIZE = 1; // CF 免费版每次只处理 1 个 JAR（DEFLATE 解压吃 CPU）
-    const result = await buildJarRegistry(fakeSourced, storage, config.fetchTimeoutMs, undefined, {
-      skipColdStartCheck: true,
-      batchLimit: BATCH_SIZE,
-    });
-    if (!result) return c.json({ error: 'No JARs found in config' }, 404);
-
-    const { registry, processed, remaining, total } = result;
-    const okCount = Object.values(registry.jars).filter((j) => j.status === 'ok').length;
-    const totalClasses = Object.values(registry.jars).reduce((s, j) => s + j.classes.length, 0);
-
-    return c.json({
-      success: true,
-      jarCount: Object.keys(registry.jars).length,
-      okCount,
-      totalClasses,
-      processed,
-      remaining,
-      total,
-      done: remaining === 0,
-    });
+      const result = await generateQR(platform);
+      return c.json(result);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-      return c.json({ error: msg }, 500);
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json({ error: msg }, 502);
     }
+  });
+
+  // 轮询扫码状态
+  app.get('/admin/cloud-login/:platform/poll', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const platform = c.req.param('platform') as CloudPlatform;
+    const token = c.req.query('token');
+    if (!token) return c.json({ error: 'token is required' }, 400);
+
+    try {
+      const result = await pollQRStatus(platform, token);
+
+      // 登录成功：自动保存凭证
+      if (result.status === 'confirmed' && result.credential) {
+        const cred: CloudCredential = {
+          platform,
+          credential: result.credential,
+          obtainedAt: new Date().toISOString(),
+          status: 'valid',
+        };
+        await saveCredential(storage, cred);
+      }
+
+      return c.json(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json({ error: msg, status: 'error' }, 502);
+    }
+  });
+
+  // 密码登录（迅雷/PikPak）
+  app.post('/admin/cloud-login/:platform/password', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const platform = c.req.param('platform') as CloudPlatform;
+    if (!PASSWORD_PLATFORMS.includes(platform)) {
+      return c.json({ error: `Platform ${platform} does not support password login` }, 400);
+    }
+
+    let body: { username?: string; password?: string };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+
+    try {
+      const result = await passwordLogin(platform, body.username || '', body.password || '');
+      if (result.success && result.credential) {
+        const cred: CloudCredential = {
+          platform,
+          credential: result.credential,
+          obtainedAt: new Date().toISOString(),
+          status: 'valid',
+        };
+        await saveCredential(storage, cred);
+      }
+      return c.json(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json({ success: false, message: msg }, 502);
+    }
+  });
+
+  // 凭证注入策略
+  app.get('/admin/credential-policy', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    return c.json(await loadCredentialPolicy(storage));
+  });
+
+  app.put('/admin/credential-policy', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    let body: { allowedHighRiskKeys?: string[]; deniedKeys?: string[] };
+    try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON' }, 400); }
+
+    const policy = await loadCredentialPolicy(storage);
+    if (Array.isArray(body.allowedHighRiskKeys)) policy.allowedHighRiskKeys = body.allowedHighRiskKeys;
+    if (Array.isArray(body.deniedKeys)) policy.deniedKeys = body.deniedKeys;
+    await saveCredentialPolicy(storage, policy);
+    return c.json({ success: true, ...policy });
+  });
+
+  // 风险分级报告
+  app.get('/admin/credential-risk-report', async (c) => {
+    if (!verifyAdmin(c.req.raw, config)) return c.json({ error: 'Unauthorized' }, 401);
+    const configRaw = await storage.get(KV_MERGED_CONFIG_FULL);
+    if (!configRaw) return c.json({ error: 'No config available. Run aggregation first.' }, 404);
+
+    const parsed: TVBoxConfig = JSON.parse(configRaw);
+    const sites = parsed.sites || [];
+    const assessments = assessAllSources(sites);
+    const policy = await loadCredentialPolicy(storage);
+
+    const summary = { safe: 0, low: 0, high: 0, unaudited: 0 };
+    for (const a of assessments) {
+      summary[a.riskLevel]++;
+    }
+
+    return c.json({ summary, assessments, policy });
+  });
+
+  // 自托管 token.json
+  app.get('/credential/token.json', async (c) => {
+    const creds = await loadCredentials(storage);
+    if (creds.size === 0) {
+      return c.json({}, 200, { 'Access-Control-Allow-Origin': '*' });
+    }
+    const tokenJson = generateTokenJson(creds);
+    return c.json(tokenJson, 200, {
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-cache',
+    });
   });
 
   // ─── MacCMS 边缘代理（仅 CF 版）──────────────────────
@@ -635,7 +784,7 @@ export function createApp(deps: AppDeps): Hono {
       }
 
       // 4. 降级：从 KV 读取 base64 编码的 JAR 二进制
-      const binBase64 = await storage.get(KV_JAR_BIN_PREFIX + key);
+      const binBase64 = await storage.get('jar_bin:' + key);
       if (binBase64) {
         console.log(`[jar-proxy] Serving ${key} from KV binary cache`);
         const binary = base64ToUint8Array(binBase64);

@@ -8,13 +8,16 @@ import { batchSiteSpeedTest, appendSpeedToName, filterUnreachableSites } from '.
 import { macCMSToTVBoxSites, processMacCMSForLocal } from './core/maccms';
 import { rewriteJarUrls } from './core/jar-proxy';
 import { batchTestLiveSources, liveSourcesToTVBoxLives } from './core/live-source';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_JAR_REGISTRY_ENABLED, KV_EDGE_PROXIES } from './core/config';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT } from './core/config';
 import { loadBlacklist, applyBlacklist, pruneBlacklist, saveBlacklist } from './core/blacklist';
 import { transformSiteNames } from './core/cleaner';
 import { parseConfigJson, type FetchProxyConfig } from './core/fetcher';
-import { buildJarRegistry, assignJars, buildJarStorageAdapter } from './core/jar-registry';
 import { scrapeSourceList, scrapeMacCMSSources, type ScrapeSourceConfig, type ScrapeMacCMSConfig } from './core/source-scraper';
-import type { NameTransformConfig, JarAssignment, EdgeProxyConfig } from './core/types';
+import { loadSearchQuota, applySearchQuota } from './core/search-quota';
+import { loadCredentials } from './core/credential-store';
+import { loadCredentialPolicy } from './core/credential-store';
+import { injectCredentials } from './core/credential-injector';
+import type { NameTransformConfig, EdgeProxyConfig } from './core/types';
 
 export async function runAggregation(storage: Storage, config: AppConfig): Promise<void> {
   const startTime = Date.now();
@@ -179,34 +182,12 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     console.log('[aggregation] Step 3: No speed data available, skipping filter');
   }
 
-  // Step 3.5: JAR 仓库分析（可选）
-  let jarAssignment: JarAssignment | undefined;
-  const jarRegistryEnabled = (await storage.get(KV_JAR_REGISTRY_ENABLED)) === 'true';
-  if (jarRegistryEnabled) {
-    console.log('[aggregation] Step 3.5: Building JAR registry...');
-    try {
-      const allConfigsForJar = [...filteredConfigs, ...inlineConfigs, ...macCMSConfigs];
-      const saveJarBin = buildJarStorageAdapter(storage, !!config.workerBaseUrl);
-      const result = await buildJarRegistry(allConfigsForJar, storage, config.fetchTimeoutMs, saveJarBin);
-      if (result) {
-        jarAssignment = assignJars(result.registry, allConfigsForJar);
-        console.log(
-          `[aggregation] JAR registry: global covers ${jarAssignment.stats.coveredByGlobal}, ` +
-          `per-site ${jarAssignment.stats.coveredByPerSite}, orphaned ${jarAssignment.stats.orphaned}`,
-        );
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[aggregation] JAR registry failed, falling back to vote: ${msg}`);
-    }
-  } else {
-    console.log('[aggregation] Step 3.5: JAR registry disabled, using vote-based spider selection');
-  }
-
-  // Step 4: 合并（包含 MacCMS 源）
+  // Step 4: 合并（包含 MacCMS 源，投票制 spider 分配）
   console.log('[aggregation] Step 4: Merging configs...');
   const allConfigs = [...filteredConfigs, ...inlineConfigs, ...macCMSConfigs];
-  let merged = mergeConfigs(allConfigs, jarAssignment);
+  const mergeResult = mergeConfigs(allConfigs);
+  let merged = mergeResult.config;
+  const siteSourceMap = mergeResult.siteSourceMap;
 
   // 将额外直播源注入到 merged.lives
   if (extraLives.length > 0) {
@@ -236,10 +217,26 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     console.log('[aggregation] Step 4.5: No blacklist entries, skipping');
   }
 
-  // Step 5: 清洗无效数据（空条目 + 本地引用）
-  console.log('[aggregation] Step 5: Cleaning invalid entries...');
+  // Step 4.6: 清洗无效数据（空条目 + 本地引用）— 必须在搜索配额前，避免配额分给随后被清理的站点
+  console.log('[aggregation] Step 4.6: Cleaning invalid entries...');
   merged = cleanEmptyEntries(merged);
   merged = cleanLocalRefs(merged);
+
+  // Step 4.7: 搜索配额（JS 排除 + 置顶排序 + 可选截断）
+  const quotaConfig = await loadSearchQuota(storage);
+  if (merged.sites) {
+    const { sites: quotaSites, quotaReport } = applySearchQuota(merged.sites, quotaConfig, siteSourceMap);
+    merged.sites = quotaSites;
+    console.log(
+      `[aggregation] Step 4.7: Search quota: ${quotaReport.totalSites} sites, ` +
+      `${quotaReport.jsExcluded} JS excluded, ${quotaReport.pinnedCount} pinned, ` +
+      `${quotaReport.truncated} truncated → ${quotaReport.searchable} searchable`
+    );
+    await storage.put(KV_SEARCH_QUOTA_REPORT, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      ...quotaReport,
+    }));
+  }
 
   // Step 5.5: 名称定制（清洗推广文字 + 前缀后缀）
   const ntRaw = await storage.get(KV_NAME_TRANSFORM);
@@ -252,6 +249,28 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     // 即使没有自定义配置，默认清洗推广文字也要执行
     console.log('[aggregation] Step 5.5: Cleaning promo text from site names...');
     merged = transformSiteNames(merged, {});
+  }
+
+  // Step 5.7: 网盘凭证注入
+  const credentials = await loadCredentials(storage);
+  if (credentials.size > 0 && merged.sites && merged.sites.length > 0) {
+    console.log('[aggregation] Step 5.7: Injecting cloud credentials...');
+    const credentialPolicy = await loadCredentialPolicy(storage);
+    const jarBaseUrl = config.workerBaseUrl || config.localBaseUrl;
+    const { sites: injectedSites, report: injReport } = injectCredentials(
+      merged.sites, credentials, credentialPolicy, jarBaseUrl,
+    );
+    merged.sites = injectedSites;
+    console.log(
+      `[aggregation] Credentials: ${injReport.injected} injected, ` +
+      `${injReport.skippedSafe} not needed, ` +
+      `${injReport.skippedHighRisk} high-risk blocked, ` +
+      `${injReport.skippedUnaudited} unaudited blocked, ` +
+      `${injReport.skippedNoRule} no rule, ` +
+      `${injReport.skippedNoCredential} no credential`,
+    );
+  } else {
+    console.log('[aggregation] Step 5.7: No cloud credentials configured, skipping');
   }
 
   // Step 6: 站点测速 + 不可达过滤 + name 标记（CF 和 Node.js 统一）

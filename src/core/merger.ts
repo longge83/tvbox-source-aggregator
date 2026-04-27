@@ -1,6 +1,6 @@
 // 站点级合并引擎
 
-import type { TVBoxConfig, TVBoxSite, SourcedConfig, JarAssignment } from './types';
+import type { TVBoxConfig, TVBoxSite, SourcedConfig } from './types';
 import { normalizeConfig, extractSpiderJarUrl } from './parser';
 import {
   deduplicateSites,
@@ -19,21 +19,19 @@ import {
  * 2. Spider JAR 智能分配（全局 + per-site）
  * 3. 各字段去重合并
  */
-export function mergeConfigs(sourcedConfigs: SourcedConfig[], jarAssignment?: JarAssignment): TVBoxConfig {
+export interface MergeResult {
+  config: TVBoxConfig;
+  siteSourceMap: Map<string, string>;  // site.key → sourceName
+}
+
+export function mergeConfigs(sourcedConfigs: SourcedConfig[]): MergeResult {
   // Step 1: 规范化所有配置
   const normalized = sourcedConfigs.map(normalizeConfig);
+  const siteSourceMap = new Map<string, string>();
 
-  // Step 2: 确定全局 spider
-  let globalSpider: string | null;
-  let globalSpiderFull: string | null = null;
-
-  if (jarAssignment) {
-    globalSpider = jarAssignment.globalSpiderUrl;
-    globalSpiderFull = jarAssignment.globalSpiderFull;
-  } else {
-    globalSpider = selectGlobalSpider(normalized);
-    globalSpiderFull = globalSpider ? findFullSpiderString(normalized, globalSpider) : null;
-  }
+  // Step 2: 确定全局 spider（投票制：选引用最多 type:3 站点的 JAR）
+  const globalSpider = selectGlobalSpider(normalized);
+  const globalSpiderFull = globalSpider ? findFullSpiderString(normalized, globalSpider) : null;
 
   // Step 3: 收集并合并所有字段
   const allSites: TVBoxSite[] = [];
@@ -54,24 +52,9 @@ export function mergeConfigs(sourcedConfigs: SourcedConfig[], jarAssignment?: Ja
         const siteCopy = { ...site };
 
         if (site.type === 3 && !site.jar) {
-          if (jarAssignment) {
-            // JAR 仓库模式：精确分配
-            const dk = `${site.key}|${site.api}`;
-            if (jarAssignment.orphanedKeys.has(dk)) {
-              siteCopy.searchable = 0;
-              siteCopy.quickSearch = 0;
-            } else {
-              const perSiteSpider = jarAssignment.siteJarMap.get(dk);
-              if (perSiteSpider) {
-                siteCopy.jar = perSiteSpider;
-              }
-            }
-          } else {
-            // 旧路径：投票制
-            const spiderJar = extractSpiderJarUrl(config.spider);
-            if (spiderJar && spiderJar !== globalSpider) {
-              siteCopy.jar = config.spider;
-            }
+          const spiderJar = extractSpiderJarUrl(config.spider);
+          if (spiderJar && spiderJar !== globalSpider) {
+            siteCopy.jar = config.spider;
           }
         }
 
@@ -88,9 +71,39 @@ export function mergeConfigs(sourcedConfigs: SourcedConfig[], jarAssignment?: Ja
     if (config.flags) allFlags.push(...config.flags);
   }
 
+  // 用 dedupKey(key|api) 建来源映射（dedup 可能改 key 但不改 api）
+  const sourceByDedupKey = new Map<string, string>();
+  for (const sourced of normalized) {
+    for (const site of sourced.config.sites || []) {
+      const dk = `${site.key}|${site.api}`;
+      if (!sourceByDedupKey.has(dk)) {
+        sourceByDedupKey.set(dk, sourced.sourceName);
+      }
+    }
+  }
+
   // Step 4: 去重
+  const dedupedSites = deduplicateSites(allSites);
+
+  // dedup 后用实际 key 构建 siteSourceMap
+  for (const site of dedupedSites) {
+    const dk = `${site.key}|${site.api}`;
+    const source = sourceByDedupKey.get(dk);
+    if (source) {
+      siteSourceMap.set(site.key, source);
+    } else {
+      // key 被改名（加了后缀），用 api 反查
+      for (const [mapDk, mapSource] of sourceByDedupKey) {
+        if (mapDk.endsWith(`|${site.api}`)) {
+          siteSourceMap.set(site.key, mapSource);
+          break;
+        }
+      }
+    }
+  }
+
   const merged: TVBoxConfig = {
-    sites: deduplicateSites(allSites),
+    sites: dedupedSites,
     parses: deduplicateParses(allParses || []),
     lives: deduplicateLives(allLives || []),
     hosts: deduplicateHosts(allHosts),
@@ -101,21 +114,16 @@ export function mergeConfigs(sourcedConfigs: SourcedConfig[], jarAssignment?: Ja
   };
 
   // 设置全局 spider
-  if (jarAssignment) {
-    if (globalSpiderFull) merged.spider = globalSpiderFull;
-    else if (globalSpider) merged.spider = globalSpider;
-  } else if (globalSpider) {
-    const fullSpider = findFullSpiderString(normalized, globalSpider);
-    merged.spider = fullSpider || globalSpider;
+  if (globalSpider) {
+    merged.spider = globalSpiderFull || globalSpider;
   }
 
   console.log(
     `[merger] Merged: ${merged.sites?.length} sites, ` +
-      `${merged.parses?.length} parses, ${merged.lives?.length} lives` +
-      (jarAssignment ? ` (JAR registry: ${jarAssignment.stats.orphaned} orphaned)` : ''),
+      `${merged.parses?.length} parses, ${merged.lives?.length} lives`,
   );
 
-  return merged;
+  return { config: merged, siteSourceMap };
 }
 
 /**
