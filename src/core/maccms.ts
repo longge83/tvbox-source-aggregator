@@ -40,13 +40,13 @@ export async function validateMacCMS(
 
 /**
  * 将 MacCMS 源条目转换为 TVBoxSite 数组
- * - 有 workerBaseUrl：使用代理 URL（CF 版）
- * - 无 workerBaseUrl：使用原始 API URL（本地版）
+ * - 有 proxyBaseUrl（workerBaseUrl || localBaseUrl）：使用代理 URL
+ * - 无 proxyBaseUrl：使用原始 API URL
  * - speedMap 有值时追加延迟标记到 name
  */
 export function macCMSToTVBoxSites(
   entries: MacCMSSourceEntry[],
-  workerBaseUrl?: string,
+  proxyBaseUrl?: string,
   speedMap?: Map<string, number>,
 ): TVBoxSite[] {
   return entries.map((entry) => {
@@ -61,8 +61,8 @@ export function macCMSToTVBoxSites(
       key: entry.key,
       name,
       type: 1,
-      api: workerBaseUrl
-        ? `${workerBaseUrl.replace(/\/$/, '')}/api/${entry.key}`
+      api: proxyBaseUrl
+        ? `${proxyBaseUrl.replace(/\/$/, '')}/api/${entry.key}`
         : entry.api,
       searchable: 1,
       quickSearch: 1,

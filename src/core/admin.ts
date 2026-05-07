@@ -382,6 +382,20 @@ ${sharedStyles}
         <div class="empty">Loading live sources...</div>
       </div>
     </div>
+
+    <!-- Channel Probe (Node/Docker only) -->
+    <div class="section" id="channelProbeSection">
+      <div class="section-title" data-i18n="channelProbeTitle">Channel Speed Probe (Node/Docker)</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="channelProbeCheck" onchange="toggleChannelProbe()">
+          <span data-i18n="channelProbeEnable">Enable scheduled channel speed test (every 12h)</span>
+        </label>
+        <button class="btn btn-sm" id="channelProbeTriggerBtn" onclick="triggerChannelProbe()" data-i18n="channelProbeTrigger">Run Now</button>
+        <button class="btn btn-sm" onclick="loadChannelProbe()" data-i18n="refresh">Refresh</button>
+      </div>
+      <div id="channelProbeStatus" style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6"></div>
+    </div>
   </div>
 
   <!-- Search Quota Tab -->
@@ -599,6 +613,14 @@ const translations = {
     sqPin:'Pin', sqUnpin:'Unpin',
     sqPinned:'Pinned', sqPinnedDesc:'Drag to reorder. Top sources are searched first in TVBox.', sqOtherSources:'Other Sources',
     sqHttp:'http', sqMainJar:'main jar', sqIndepJar:'indep jar',
+    channelProbeTitle:'Channel Speed Probe (Node/Docker)',
+    channelProbeEnable:'Enable scheduled channel speed test (every 12h)',
+    channelProbeTrigger:'Run Now',
+    channelProbeIdle:'Idle', channelProbeRunning:'Running', channelProbeDone:'Completed', channelProbeError:'Error',
+    channelProbeState:'State', channelProbeProgress:'Progress', channelProbeCoverage:'Coverage',
+    channelProbeChannels:'Channels', channelProbeDuration:'Duration', channelProbeFinished:'Finished at',
+    channelProbeStarted:'Probe started', channelProbeDisabledFirst:'Enable probe first', channelProbeAlreadyRunning:'Already running',
+    channelProbeCfOnly:'Only Node/Docker supports channel probing',
     footer:'TVBox Source Aggregator &middot; Admin Console',
   },
   zh: {
@@ -657,6 +679,14 @@ const translations = {
     sqPin:'置顶', sqUnpin:'取消置顶',
     sqPinned:'置顶源', sqPinnedDesc:'上下移动排序，排在前面的源在 TVBox 搜索时优先执行', sqOtherSources:'其他源',
     sqHttp:'HTTP', sqMainJar:'主 JAR', sqIndepJar:'独立 JAR',
+    channelProbeTitle:'频道级测速（仅 Node/Docker）',
+    channelProbeEnable:'启用定时频道测速（每 12 小时）',
+    channelProbeTrigger:'立即执行',
+    channelProbeIdle:'空闲', channelProbeRunning:'运行中', channelProbeDone:'已完成', channelProbeError:'失败',
+    channelProbeState:'状态', channelProbeProgress:'进度', channelProbeCoverage:'覆盖率',
+    channelProbeChannels:'频道数', channelProbeDuration:'耗时', channelProbeFinished:'完成时间',
+    channelProbeStarted:'测速已启动', channelProbeDisabledFirst:'请先启用测速', channelProbeAlreadyRunning:'已在运行',
+    channelProbeCfOnly:'仅 Node/Docker 支持频道级测速',
     footer:'TVBox 源聚合器 &middot; 管理控制台',
   }
 };
@@ -709,6 +739,7 @@ async function loadAll() {
   loadEdgeProxies();
   loadSearchQuota();
   loadCloudCredentials();
+  loadChannelProbe();
 }
 
 async function loadStatus() {
@@ -1185,6 +1216,77 @@ async function saveSpeedTest() {
   }
 
   setTimeout(() => { status.textContent = ''; }, 3000);
+}
+
+// --- Channel Probe (Node/Docker) ---
+async function loadChannelProbe() {
+  const box = $('channelProbeStatus');
+  try {
+    const res = await auth.authFetch('/admin/channel-probe/status');
+    if (res.status === 404) {
+      $('channelProbeSection').style.display = 'none';
+      return;
+    }
+    if (!res.ok) {
+      box.textContent = t('channelProbeCfOnly');
+      return;
+    }
+    const d = await res.json();
+    $('channelProbeCheck').checked = !!d.enabled;
+    const s = d.status || {};
+    const stateLabel = { idle: t('channelProbeIdle'), running: t('channelProbeRunning'), done: t('channelProbeDone'), error: t('channelProbeError') }[s.state] || s.state || '-';
+    const lines = [];
+    lines.push(t('channelProbeState') + ': ' + stateLabel + (d.running ? ' ⏳' : ''));
+    if (s.totalUrls) {
+      lines.push(t('channelProbeProgress') + ': ' + (s.probed || 0) + ' / ' + s.totalUrls + ' | ' + t('channelProbeCoverage') + ': ' + (s.coverage || 0) + '% | ' + t('channelProbeChannels') + ': ' + (s.totalChannels || 0));
+    }
+    if (s.durationMs) {
+      lines.push(t('channelProbeDuration') + ': ' + (s.durationMs / 1000).toFixed(1) + 's');
+    }
+    if (s.finishedAt) {
+      lines.push(t('channelProbeFinished') + ': ' + new Date(s.finishedAt).toLocaleString());
+    }
+    if (s.error) {
+      lines.push('⚠️ ' + s.error);
+    }
+    box.innerHTML = lines.map(l => '<div>' + l.replace(/</g,'&lt;') + '</div>').join('');
+  } catch {
+    box.textContent = t('networkError');
+  }
+}
+
+async function toggleChannelProbe() {
+  const enabled = $('channelProbeCheck').checked;
+  try {
+    await auth.authFetch('/admin/channel-probe/toggle', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    toast(t('saved'));
+    loadChannelProbe();
+  } catch {
+    toast(t('networkError'), 'error');
+  }
+}
+
+async function triggerChannelProbe() {
+  const btn = $('channelProbeTriggerBtn');
+  btn.disabled = true;
+  try {
+    const res = await auth.authFetch('/admin/channel-probe/trigger', { method: 'POST' });
+    const d = await res.json();
+    if (res.ok) {
+      toast(t('channelProbeStarted'));
+      setTimeout(loadChannelProbe, 500);
+    } else {
+      toast(d.error || 'Failed', 'error');
+    }
+  } catch {
+    toast(t('networkError'), 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // --- Edge Proxies ---

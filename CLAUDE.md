@@ -17,25 +17,33 @@ TVBox Source Aggregator — 将多个 TVBox 配置源合并成一个稳定的聚
 
 ### 核心模块
 - `src/routes.ts` — HTTP 路由（Hono 框架），管理后台、配置输出、代理等所有端点
-- `src/aggregator.ts` — 聚合流程编排，串联 fetch → parse → merge → dedup → speedtest
+- `src/aggregator.ts` — 聚合流程编排：fetch → parse → merge → dedup → speedtest → MacCMS/Live/Blacklist/搜索配额/Jar 改写/凭证注入，并追踪源健康
 
 ### 业务逻辑 (`src/core/`)
-- `fetcher.ts` — 批量 fetch 配置 JSON，支持多仓递归展开
+- `fetcher.ts` — 批量 fetch 配置 JSON（多仓递归展开 + 代理回退 + TVBox/浏览器双 UA 回退 + JSON 注释容错）
 - `parser.ts` — 配置 JSON 规范化
-- `merger.ts` — 站点级合并引擎
-- `dedup.ts` — 站点去重逻辑
-- `speedtest.ts` — zbape.com 测速 API 集成
+- `merger.ts` — 全类型合并（sites/parses/lives/rules/doh/hosts/…）+ 全局 spider 选择 + 空条目 / 本地引用清洗
+- `dedup.ts` — 多维度去重（sites/parses/lives/doh/hosts/strings）+ rules 合并
+- `speedtest.ts` — 本地 HTTP GET 自测（TTFB）+ 名称追加延迟标记 + 不可达站点过滤
 - `decoder.ts` — 配置解码器（图片伪装 Base64 + AES CBC/ECB 加密）
-- `jar-proxy.ts` — Spider JAR 代理（MD5 映射 + URL 转发）
+- `jar-proxy.ts` — Spider JAR 代理改写（MD5 / SHA-256 短 key → 原始 URL，纯内存重写，不再写 KV 注册表）
 - `live-source.ts` — 直播源聚合与测活
 - `maccms.ts` — MacCMS 源验证与转换
-- `blacklist.ts` — 站点黑名单管理
+- `blacklist.ts` — 黑名单管理（站点 / 解析 / 直播三类指纹 + 自动 prune）
+- `search-quota.ts` — 搜索配额（JS 站排除 + 置顶 + 可选截断）
+- `source-scraper.ts` — TVBox 源列表 / MacCMS 资源站抓取（含萌芽插件 AES 解密）
+- `cloud-login.ts` — 网盘扫码/密码登录（阿里/夸克/百度/迅雷/UC/115/123/天翼）
+- `credential-store.ts` — 网盘凭证 AES-GCM 加密存储 + 注入策略
+- `credential-risk.ts` — 源的网盘凭证使用风险评估（safe/low/high/unaudited）
+- `credential-injector.ts` — 按规则向站点 ext 注入凭证 + 生成自托管 token.json
 - `admin.ts` — 管理后台 HTML 页面
 - `dashboard.ts` — 监控仪表盘页面
 - `config-editor.ts` — 可视化配置编辑器
+- `shared-ui.ts` — 管理页共享前端 JS（admin/dashboard/config-editor 复用）
+- `shared-styles.ts` — 管理页共享 CSS
 - `config.ts` — KV 键名常量和默认配置
 - `types.ts` — TypeScript 类型定义
-- `cleaner.ts` — 配置清理工具
+- `cleaner.ts` — 站点名正则替换（NameTransform）
 
 ### 存储抽象层 (`src/storage/`)
 - `interface.ts` — Storage 接口定义

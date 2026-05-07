@@ -45,6 +45,9 @@ export interface TVBoxLive {
   header?: Record<string, string>;
   playerType?: number;
   ext?: string | Record<string, unknown>;
+  // Native 格式（live-merger 产物）— 与 FongMi 共用同一数组元素类型
+  group?: string;
+  channels?: TVBoxLiveChannel[];
 }
 
 export interface TVBoxRule {
@@ -68,6 +71,9 @@ export interface TVBoxConfig {
   pic?: string; // 图片代理前缀，TVBox 客户端加载图片时自动拼接
   sites?: TVBoxSite[];
   parses?: TVBoxParse[];
+  // lives 兼容两种 TVBox 格式（同一数组类型，字段可选）：
+  //   FongMi 格式（含 type/url）— 来自各源 config 的原始 lives
+  //   Native 格式（含 group/channels）— live-merger 合并后产物
   lives?: TVBoxLive[];
   hosts?: string[];
   rules?: TVBoxRule[];
@@ -209,4 +215,31 @@ export interface SearchQuotaReport {
   searchable: number;           // 最终可搜索数
   pinnedCount: number;          // 置顶源命中数
   truncated: number;            // 被截断数（maxSearchable > 0 时）
+}
+
+// ═══ 直播频道级测速（方案 D+）══════════════════════════
+
+// URL → 延迟 ms 的映射（持久化到 KV_CHANNEL_SPEED_MAP）
+export interface ChannelSpeedEntry {
+  speedMs: number;          // TTFB 或连通耗时
+  probedAt: string;         // ISO 时间
+  kind: 'm3u8' | 'ts' | 'tcp' | 'fail';
+}
+export type ChannelSpeedMap = Record<string, ChannelSpeedEntry>;
+
+// 频道测速任务状态
+export type ChannelProbeState = 'idle' | 'running' | 'done' | 'error';
+
+export interface ChannelProbeStatus {
+  state: ChannelProbeState;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  totalUrls: number;
+  probed: number;            // 当前已测完数
+  success: number;           // 成功
+  failed: number;            // 超时/失败
+  totalChannels: number;     // 合并后频道数
+  coverage: number;          // 覆盖率（success/totalUrls，百分比）
+  error?: string;
 }

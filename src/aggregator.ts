@@ -1,14 +1,15 @@
 // 聚合流程编排
 
 import type { Storage } from './storage/interface';
-import type { AppConfig, SourceEntry, SourcedConfig, MacCMSSourceEntry, LiveSourceEntry, TVBoxLive, SourceFetchResult, SourceHealthRecord } from './core/types';
+import type { AppConfig, SourceEntry, SourcedConfig, MacCMSSourceEntry, SourceFetchResult, SourceHealthRecord } from './core/types';
 import { fetchConfigs } from './core/fetcher';
 import { mergeConfigs, cleanLocalRefs, cleanEmptyEntries } from './core/merger';
 import { batchSiteSpeedTest, appendSpeedToName, filterUnreachableSites } from './core/speedtest';
 import { macCMSToTVBoxSites, processMacCMSForLocal } from './core/maccms';
 import { rewriteJarUrls } from './core/jar-proxy';
-import { batchTestLiveSources, liveSourcesToTVBoxLives } from './core/live-source';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT } from './core/config';
+import { mergeLivesToNative, type LiveSourceInput } from './core/live-merger';
+import { loadSpeedMap as loadChannelSpeedMap } from './core/channel-probe';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_CHANNEL_MERGED_TREE } from './core/config';
 import { loadBlacklist, applyBlacklist, pruneBlacklist, saveBlacklist } from './core/blacklist';
 import { transformSiteNames } from './core/cleaner';
 import { parseConfigJson, type FetchProxyConfig } from './core/fetcher';
@@ -107,9 +108,7 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
   console.log('[aggregation] Step 1.5: Processing MacCMS sources...');
   const macCMSConfigs = await processMacCMSSources(storage, config);
 
-  // Step 1.6: 处理直播源（admin 手动源 + 连通性测试 + 改写）
-  console.log('[aggregation] Step 1.6: Processing live sources...');
-  const extraLives = await processLiveSources(storage, config);
+  // Step 1.6: 直播源频道级合并移至 Step 6.5（方案 D+）
 
   // Step 1.8: 分离 inline:// 源，从 KV 直接加载
   const remoteSources = sources.filter(s => !s.url.startsWith('inline://'));
@@ -188,12 +187,6 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
   const mergeResult = mergeConfigs(allConfigs);
   let merged = mergeResult.config;
   const siteSourceMap = mergeResult.siteSourceMap;
-
-  // 将额外直播源注入到 merged.lives
-  if (extraLives.length > 0) {
-    merged.lives = [...(merged.lives || []), ...extraLives];
-    console.log(`[aggregation] Injected ${extraLives.length} extra live sources`);
-  }
 
   // Step 4.5: 黑名单过滤
   console.log('[aggregation] Step 4.5: Applying blacklist...');
@@ -297,6 +290,79 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     console.log('[aggregation] Step 6: No sites to test');
   }
 
+  // Step 6.5: 直播源频道级合并（方案 D+）
+  // 收集所有 m3u/txt URL（配置源合来的 FongMi 格式 lives + admin 手动源）
+  // → 下载 → 解析 → 按频道名合并 urls → 输出 TVBoxLiveGroup[]
+  // CF Worker 免费版 50 子请求上限，Step 6.5 要再下载 N 个 m3u 会爆，整段跳过
+  // CF 部署保留 FongMi 格式，lives[0] 崩溃风险保留；建议 CF 用户切 Docker
+  if (config.workerBaseUrl) {
+    console.log('[aggregation] Step 6.5: Skipped on CF (subrequest limit, use Docker for channel merging)');
+  } else {
+  console.log('[aggregation] Step 6.5: Channel-level live merging...');
+  {
+    const liveInputs: LiveSourceInput[] = [];
+
+    // 配置源合并来的 lives（FongMi 格式）
+    for (const l of (merged.lives || []) as Array<{ name?: string; url?: string; api?: string; ua?: string; header?: Record<string, string>; group?: string }>) {
+      // 跳过已经是 Native 格式的（含 group 字段无 url）
+      if (l.group && !l.url && !l.api) continue;
+      const u = l.url || l.api;
+      if (!u || !/^https?:\/\//i.test(u)) continue;
+      if (u.includes('127.0.0.1') || u.includes('localhost')) continue;
+      liveInputs.push({
+        name: l.name || 'source',
+        url: u,
+        ua: l.ua,
+        header: l.header,
+      });
+    }
+
+    // admin 手动源
+    const liveRaw = await storage.get(KV_LIVE_SOURCES);
+    if (liveRaw) {
+      try {
+        const manual: Array<{ name: string; url: string }> = JSON.parse(liveRaw);
+        for (const m of manual) {
+          if (!m.url || !/^https?:\/\//i.test(m.url)) continue;
+          if (m.url.includes('127.0.0.1') || m.url.includes('localhost')) continue;
+          liveInputs.push({ name: m.name || 'manual', url: m.url });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // URL 去重
+    const seen = new Set<string>();
+    const uniqueInputs = liveInputs.filter((i) => {
+      if (seen.has(i.url)) return false;
+      seen.add(i.url);
+      return true;
+    });
+
+    if (uniqueInputs.length === 0) {
+      console.log('[aggregation] Step 6.5: No live sources to merge');
+      merged.lives = [];
+    } else {
+      console.log(`[aggregation] Step 6.5: ${uniqueInputs.length} unique live source URLs`);
+
+      // 加载频道级测速缓存（仅 Node/Docker 有）
+      const channelSpeedMap = await loadChannelSpeedMap(storage);
+
+      const mergeResult = await mergeLivesToNative(uniqueInputs, config.fetchTimeoutMs, channelSpeedMap);
+      merged.lives = mergeResult.groups;
+
+      // 保存合并树供 channel-probe 使用
+      await storage.put(KV_CHANNEL_MERGED_TREE, JSON.stringify(mergeResult.groups));
+
+      console.log(
+        `[aggregation] Step 6.5: ${mergeResult.sourcesDownloaded}/${uniqueInputs.length} sources OK, ` +
+        `${mergeResult.groups.length} groups, ${mergeResult.totalChannels} channels, ${mergeResult.totalUrls} URLs`,
+      );
+    }
+  }
+  }
+
   // Step 7: JAR URL 改写（CF 用 workerBaseUrl，本地用 localBaseUrl）
   const jarBaseUrl = config.workerBaseUrl || config.localBaseUrl;
   if (jarBaseUrl) {
@@ -355,13 +421,15 @@ async function processMacCMSSources(
   let validEntries: MacCMSSourceEntry[];
   let speedMap: Map<string, number> | undefined;
 
-  if (config.workerBaseUrl) {
-    // CF 版：跳过验证，代理本身就是可用性保证
-    console.log('[aggregation] CF mode: skipping MacCMS validation, using proxy URLs');
+  const edgeProxiesRaw = !config.workerBaseUrl ? await storage.get(KV_EDGE_PROXIES) : null;
+
+  if (config.workerBaseUrl || edgeProxiesRaw) {
+    // CF 版或本地有 edge proxy：跳过验证，运行时代理兜底
+    console.log(`[aggregation] Skipping MacCMS validation (${config.workerBaseUrl ? 'CF proxy' : 'edge proxy configured'})`);
     validEntries = entries;
   } else {
-    // 本地版：并发验证，过滤不可达站点，收集延迟
-    console.log('[aggregation] Local mode: validating MacCMS sources...');
+    // 本地版无 edge proxy：并发验证，过滤不可达站点
+    console.log('[aggregation] Local mode (no edge proxy): validating MacCMS sources...');
     const result = await processMacCMSForLocal(entries, config.siteTimeoutMs);
     validEntries = result.passed;
     speedMap = result.speedMap;
@@ -372,7 +440,8 @@ async function processMacCMSSources(
     return [];
   }
 
-  const sites = macCMSToTVBoxSites(validEntries, config.workerBaseUrl, speedMap);
+  const proxyBaseUrl = config.workerBaseUrl || config.localBaseUrl;
+  const sites = macCMSToTVBoxSites(validEntries, proxyBaseUrl, speedMap);
   console.log(`[aggregation] Converted ${sites.length} MacCMS sources to TVBoxSites`);
 
   return [{
@@ -380,56 +449,6 @@ async function processMacCMSSources(
     sourceName: 'MacCMS Sources',
     config: { sites },
   }];
-}
-
-/**
- * 处理直播源：
- * 1. CF 模式：从 juwanhezi.com 抓取 + admin 手动源 → 去重 → 连通性测试 → URL 改写
- * 2. 本地模式：admin 手动源 → 连通性测试 → name 追加延迟
- */
-async function processLiveSources(
-  storage: Storage,
-  config: AppConfig,
-): Promise<TVBoxLive[]> {
-  // 读取 admin 手动直播源
-  const raw = await storage.get(KV_LIVE_SOURCES);
-  const allEntries: LiveSourceEntry[] = raw ? JSON.parse(raw) : [];
-
-  if (allEntries.length === 0) {
-    console.log('[aggregation] No extra live sources to process');
-    return [];
-  }
-
-  console.log(`[aggregation] ${allEntries.length} manual live sources found`);
-
-  // 去重（按 URL）
-  const seen = new Set<string>();
-  const uniqueEntries = allEntries.filter((entry) => {
-    if (seen.has(entry.url)) return false;
-    seen.add(entry.url);
-    return true;
-  });
-
-  console.log(`[aggregation] ${uniqueEntries.length} unique live sources after dedup`);
-
-  // 4. 连通性测试
-  const { passed, speedMap } = await batchTestLiveSources(uniqueEntries, config.siteTimeoutMs);
-
-  if (passed.length === 0) {
-    console.warn('[aggregation] No live sources passed connectivity test');
-    return [];
-  }
-
-  // 5. 转为 TVBoxLive[]（CF: URL 改写 + KV 映射，本地: name 追加延迟）
-  const lives = await liveSourcesToTVBoxLives(
-    passed,
-    config.workerBaseUrl,
-    storage,
-    speedMap,
-  );
-
-  console.log(`[aggregation] Produced ${lives.length} TVBoxLive entries`);
-  return lives;
 }
 
 /**

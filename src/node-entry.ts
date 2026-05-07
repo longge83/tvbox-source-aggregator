@@ -9,12 +9,14 @@ import * as fs from 'fs';
 import * as dns from 'dns';
 import { createApp } from './routes';
 import { runAggregation } from './aggregator';
+import { runChannelProbe, isProbeEnabled } from './core/channel-probe';
 import {
   DEFAULT_SPEED_TIMEOUT_MS,
   DEFAULT_SITE_TIMEOUT_MS,
   DEFAULT_FETCH_TIMEOUT_MS,
   KV_CRON_INTERVAL,
   DEFAULT_CRON_INTERVAL,
+  CHANNEL_PROBE_CRON,
 } from './core/config';
 import type { Storage } from './storage/interface';
 import type { AppConfig } from './core/types';
@@ -163,10 +165,23 @@ async function main() {
 
   scheduleCron(initialSchedule);
 
+  // 频道测速独立 cron（每 12 小时，默认关闭）
+  cron.schedule(CHANNEL_PROBE_CRON, async () => {
+    try {
+      if (!(await isProbeEnabled(storage))) return;
+      console.log(`[channel-probe-cron] Triggered at ${new Date().toISOString()}`);
+      await runChannelProbe(storage);
+    } catch (err) {
+      console.error('[channel-probe-cron] Error:', err);
+    }
+  });
+  console.log(`[channel-probe-cron] Scheduled: ${CHANNEL_PROBE_CRON} (runs when enabled)`);
+
   const app = createApp({
     storage,
     config,
     triggerRefresh: runWithGuard,
+    enableChannelProbe: true,
     onCronIntervalChange: (intervalMinutes: number) => {
       const newCron = intervalToCron(intervalMinutes);
       console.log(`[cron] Interval changed to ${intervalLabel(intervalMinutes)} (${newCron})`);
