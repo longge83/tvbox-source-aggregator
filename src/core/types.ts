@@ -217,6 +217,40 @@ export interface SearchQuotaReport {
   truncated: number;            // 被截断数（maxSearchable > 0 时）
 }
 
+// ═══ 聚合日志 ══════════════════════════════════════════
+
+export interface AggLogFailedSource {
+  url: string;
+  name: string;
+  status: SourceFetchStatus;
+  errorMessage?: string;
+}
+
+export interface AggLogSiteChange {
+  key: string;
+  name?: string;
+}
+
+export interface AggregationLog {
+  id: string;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  success: boolean;
+  errorMessage?: string;
+  totalSources: number;
+  okSources: number;
+  failedSources: AggLogFailedSource[];
+  addedSites: AggLogSiteChange[];
+  removedSites: AggLogSiteChange[];
+  finalSiteCount: number;
+  finalParseCount: number;
+  finalLiveCount: number;
+  blacklistRemovedSites: number;
+  blacklistRemovedParses: number;
+  blacklistRemovedLives: number;
+}
+
 // ═══ 直播频道级测速（方案 D+）══════════════════════════
 
 // URL → 延迟 ms 的映射（持久化到 KV_CHANNEL_SPEED_MAP）

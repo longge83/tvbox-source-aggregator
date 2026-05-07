@@ -267,7 +267,7 @@ ${sharedStyles}
     <div class="header-top">
       <div class="header-label" data-i18n="headerLabel">Config Editor</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">☀️</button>
+        <span id="themeDropdown"></span>
         <button class="lang-toggle" id="langToggle" onclick="doToggleLang()">EN</button>
       </div>
     </div>
@@ -720,6 +720,8 @@ async function batchBlock() {
 }
 
 applyTheme(getTheme());
+initThemeDropdown();
+loadBgFromServer();
 applyLang(_translations, getLang());
 </script>
 </body>
