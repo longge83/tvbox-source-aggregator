@@ -1,7 +1,7 @@
 // 聚合流程编排
 
 import type { Storage } from './storage/interface';
-import type { AppConfig, SourceEntry, SourcedConfig, MacCMSSourceEntry, SourceFetchResult, SourceHealthRecord } from './core/types';
+import type { AppConfig, SourceEntry, SourcedConfig, MacCMSSourceEntry, SourceFetchResult, SourceHealthRecord, AggregationLog, AggLogFailedSource, AggLogSiteChange } from './core/types';
 import { fetchConfigs } from './core/fetcher';
 import { mergeConfigs, cleanLocalRefs, cleanEmptyEntries } from './core/merger';
 import { batchSiteSpeedTest, appendSpeedToName, filterUnreachableSites } from './core/speedtest';
@@ -9,7 +9,7 @@ import { macCMSToTVBoxSites, processMacCMSForLocal } from './core/maccms';
 import { rewriteJarUrls } from './core/jar-proxy';
 import { mergeLivesToNative, type LiveSourceInput } from './core/live-merger';
 import { loadSpeedMap as loadChannelSpeedMap } from './core/channel-probe';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_CHANNEL_MERGED_TREE } from './core/config';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_CHANNEL_MERGED_TREE, KV_AGG_LOGS, AGG_LOGS_MAX, KV_SITE_SNAPSHOT, KV_DEDUP_CONFIG } from './core/config';
 import { loadBlacklist, applyBlacklist, pruneBlacklist, saveBlacklist } from './core/blacklist';
 import { transformSiteNames } from './core/cleaner';
 import { parseConfigJson, type FetchProxyConfig } from './core/fetcher';
@@ -18,6 +18,8 @@ import { loadSearchQuota, applySearchQuota } from './core/search-quota';
 import { loadCredentials } from './core/credential-store';
 import { loadCredentialPolicy } from './core/credential-store';
 import { injectCredentials } from './core/credential-injector';
+import { loadGroupOrder, applyGroupOrder } from './core/group-order';
+import { deduplicateSimilarNames } from './core/dedup';
 import type { NameTransformConfig, EdgeProxyConfig } from './core/types';
 
 export async function runAggregation(storage: Storage, config: AppConfig): Promise<void> {
@@ -33,10 +35,40 @@ export async function runAggregation(storage: Storage, config: AppConfig): Promi
     console.error(`[aggregation] Stack: ${stack}`);
     // 写入错误信息方便调试
     await storage.put(KV_LAST_UPDATE, `ERROR @ ${new Date().toISOString()}: ${msg}`);
+
+    await appendAggLog(storage, {
+      id: new Date(startTime).toISOString(),
+      startTime: new Date(startTime).toISOString(),
+      endTime: new Date().toISOString(),
+      durationMs: Date.now() - startTime,
+      success: false,
+      errorMessage: msg,
+      totalSources: 0,
+      okSources: 0,
+      failedSources: [],
+      addedSites: [],
+      removedSites: [],
+      finalSiteCount: 0,
+      finalParseCount: 0,
+      finalLiveCount: 0,
+      blacklistRemovedSites: 0,
+      blacklistRemovedParses: 0,
+      blacklistRemovedLives: 0,
+    });
   }
 }
 
 async function _runAggregation(storage: Storage, config: AppConfig, startTime: number): Promise<void> {
+
+  // ── 日志收集用局部变量 ──
+  let logFetchResults: SourceFetchResult[] = [];
+  let logBlacklistRemovedSites = 0;
+  let logBlacklistRemovedParses = 0;
+  let logBlacklistRemovedLives = 0;
+
+  // 读取上次站点快照（用于计算 diff）
+  const snapshotRaw = await storage.get(KV_SITE_SNAPSHOT);
+  const prevSiteKeys: Set<string> = snapshotRaw ? new Set(JSON.parse(snapshotRaw)) : new Set();
 
   // Step 0: 自动抓取源（需配置 SCRAPE_SOURCE_URL 环境变量）
   if (config.scrapeSourceUrl && config.scrapeSourceReferer) {
@@ -149,6 +181,7 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     }
   }
   const { configs: sourcedConfigs, fetchResults } = await fetchConfigs(remoteSources, config.fetchTimeoutMs, proxyConfig);
+  logFetchResults = fetchResults;
 
   // 更新源健康状态
   await updateSourceHealth(storage, fetchResults);
@@ -205,6 +238,9 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
 
     const { config: filtered, removedSites, removedParses, removedLives } = await applyBlacklist(merged, pruned);
     merged = filtered;
+    logBlacklistRemovedSites = removedSites;
+    logBlacklistRemovedParses = removedParses;
+    logBlacklistRemovedLives = removedLives;
     console.log(`[aggregation] Blacklist removed: ${removedSites} sites, ${removedParses} parses, ${removedLives} lives`);
   } else {
     console.log('[aggregation] Step 4.5: No blacklist entries, skipping');
@@ -269,25 +305,48 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
   // Step 6: 站点测速 + 不可达过滤 + name 标记（CF 和 Node.js 统一）
   const speedTestRaw = await storage.get(KV_SPEED_TEST_ENABLED);
   const speedTestEnabled = speedTestRaw !== 'false'; // 默认启用
+  let siteSpeedMap: Map<string, number | null> = new Map();
 
   if (!speedTestEnabled) {
     console.log('[aggregation] Step 6: Speed test disabled, skipping');
   } else if (merged.sites && merged.sites.length > 0) {
     console.log('[aggregation] Step 6: Site speed test + unreachable filtering...');
-    const speedMap = await batchSiteSpeedTest(merged.sites, config.siteTimeoutMs);
+    siteSpeedMap = await batchSiteSpeedTest(merged.sites, config.siteTimeoutMs);
 
-    if (speedMap.size > 0) {
+    if (siteSpeedMap.size > 0) {
       // 过滤不可达站点（含安全阀）
-      const { sites: filteredSites, filtered } = filterUnreachableSites(merged.sites, speedMap);
+      const { sites: filteredSites, filtered } = filterUnreachableSites(merged.sites, siteSpeedMap);
       merged.sites = filteredSites;
 
       // 本地模式追加延迟标签到站点名称
       if (!config.workerBaseUrl) {
-        merged.sites = appendSpeedToName(merged.sites, speedMap);
+        merged.sites = appendSpeedToName(merged.sites, siteSpeedMap);
       }
     }
   } else {
     console.log('[aggregation] Step 6: No sites to test');
+  }
+
+  // Step 6.2: 相似名称去重（保留响应速度最快的站点）
+  const dedupRaw = await storage.get(KV_DEDUP_CONFIG);
+  let similarDedupEnabled = true;
+  let similarDedupThreshold = 0.85;
+  if (dedupRaw) {
+    try {
+      const dedupCfg = JSON.parse(dedupRaw);
+      similarDedupEnabled = dedupCfg.similarDedup !== false;
+      similarDedupThreshold = typeof dedupCfg.similarDedupThreshold === 'number'
+        ? dedupCfg.similarDedupThreshold
+        : 0.85;
+    } catch { /* ignore */ }
+  }
+
+  if (similarDedupEnabled && merged.sites && merged.sites.length > 0) {
+    console.log(`[aggregation] Step 6.2: Similar-name dedup (threshold: ${similarDedupThreshold})...`);
+    merged.sites = deduplicateSimilarNames(merged.sites, siteSpeedMap, similarDedupThreshold);
+    console.log(`[aggregation] After similar dedup: ${merged.sites.length} sites`);
+  } else {
+    console.log('[aggregation] Step 6.2: Similar-name dedup disabled, skipping');
   }
 
   // Step 6.5: 直播源频道级合并（方案 D+）
@@ -363,6 +422,15 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
   }
   }
 
+  // Step 6.8: 自定义分组排序
+  const groupOrderCfg = await loadGroupOrder(storage);
+  if (groupOrderCfg.enabled && merged.sites && merged.sites.length > 0) {
+    console.log('[aggregation] Step 6.8: Applying custom group order...');
+    merged.sites = applyGroupOrder(merged.sites, groupOrderCfg);
+  } else {
+    console.log('[aggregation] Step 6.8: Group order disabled or no rules, skipping');
+  }
+
   // Step 7: JAR URL 改写（CF 用 workerBaseUrl，本地用 localBaseUrl）
   const jarBaseUrl = config.workerBaseUrl || config.localBaseUrl;
   if (jarBaseUrl) {
@@ -397,6 +465,56 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
     `[aggregation] Done in ${elapsed}s. ` +
       `${merged.sites?.length} sites, ${merged.parses?.length} parses, ${merged.lives?.length} lives`,
   );
+
+  // Step 9: 聚合日志
+  const nowSiteKeys = new Set((merged.sites || []).map(s => s.key));
+  const siteKeyToName = new Map((merged.sites || []).map(s => [s.key, s.name || s.key]));
+
+  const addedSites: AggLogSiteChange[] = [];
+  for (const key of nowSiteKeys) {
+    if (!prevSiteKeys.has(key)) {
+      addedSites.push({ key, name: siteKeyToName.get(key) });
+    }
+  }
+
+  const removedSites: AggLogSiteChange[] = [];
+  for (const key of prevSiteKeys) {
+    if (!nowSiteKeys.has(key)) {
+      removedSites.push({ key });
+    }
+  }
+
+  const failedSources: AggLogFailedSource[] = logFetchResults
+    .filter(r => r.status !== 'ok')
+    .map(r => ({ url: r.url, name: r.name, status: r.status, errorMessage: r.errorMessage }));
+
+  const aggLog: AggregationLog = {
+    id: new Date(startTime).toISOString(),
+    startTime: new Date(startTime).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - startTime,
+    success: true,
+    totalSources: logFetchResults.length,
+    okSources: logFetchResults.filter(r => r.status === 'ok').length,
+    failedSources,
+    addedSites,
+    removedSites,
+    finalSiteCount: merged.sites?.length || 0,
+    finalParseCount: merged.parses?.length || 0,
+    finalLiveCount: merged.lives?.length || 0,
+    blacklistRemovedSites: logBlacklistRemovedSites,
+    blacklistRemovedParses: logBlacklistRemovedParses,
+    blacklistRemovedLives: logBlacklistRemovedLives,
+  };
+
+  await appendAggLog(storage, aggLog);
+  await storage.put(KV_SITE_SNAPSHOT, JSON.stringify([...nowSiteKeys]));
+
+  if (addedSites.length > 0 || removedSites.length > 0) {
+    console.log(
+      `[aggregation] Site diff: +${addedSites.length} added, -${removedSites.length} removed`,
+    );
+  }
 }
 
 /**
@@ -509,4 +627,19 @@ async function updateSourceHealth(storage: Storage, fetchResults: SourceFetchRes
   }
 
   await storage.put(KV_SOURCE_HEALTH, JSON.stringify(newRecords));
+}
+
+async function appendAggLog(storage: Storage, log: AggregationLog): Promise<void> {
+  try {
+    const raw = await storage.get(KV_AGG_LOGS);
+    const logs: AggregationLog[] = raw ? JSON.parse(raw) : [];
+    logs.push(log);
+    while (logs.length > AGG_LOGS_MAX) {
+      logs.shift();
+    }
+    await storage.put(KV_AGG_LOGS, JSON.stringify(logs));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[aggregation] Failed to write agg log: ${msg}`);
+  }
 }

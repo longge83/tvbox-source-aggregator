@@ -269,7 +269,7 @@ ${sharedStyles}
     <div class="header-top">
       <div class="header-label" data-i18n="headerLabel">Admin Console</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">☀️</button>
+        <span id="themeDropdown"></span>
         <button class="lang-toggle" id="langToggle" onclick="doToggleLang()">中文</button>
       </div>
     </div>
@@ -293,6 +293,7 @@ ${sharedStyles}
     <div class="tab" data-tab="searchQuota" onclick="switchTab('searchQuota')" id="tabSearchQuota" style="display:none"><span data-i18n="tabSearchQuota">Search</span> <span class="badge" id="badgeSearchQuota">0</span></div>
     <div class="tab" data-tab="cloud" onclick="switchTab('cloud')"><span data-i18n="tabCloud">Cloud</span></div>
     <div class="tab" data-tab="settings" onclick="switchTab('settings')"><span data-i18n="tabSettings">Settings</span></div>
+    <div class="tab" data-tab="aggLogs" onclick="switchTab('aggLogs')"><span data-i18n="tabAggLogs">Logs</span></div>
   </div>
 
   <!-- Sources Tab -->
@@ -545,6 +546,79 @@ ${sharedStyles}
         <span class="status-text" id="ntStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
       </div>
     </div>
+
+    <!-- 相似去重配置 -->
+    <div class="section">
+      <div class="section-title" data-i18n="dedupConfigTitle">Similar Name Dedup</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="similarDedupCheck" onchange="saveDedupConfig()" checked>
+          <span data-i18n="similarDedupLabel">Enable similar-name dedup (keep fastest)</span>
+        </label>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label class="form-label" style="margin:0" data-i18n="dedupThreshold">Threshold</label>
+        <input type="range" id="dedupThreshold" min="50" max="100" value="85" style="width:120px" oninput="$('dedupThresholdVal').textContent=this.value+'%'">
+        <span id="dedupThresholdVal" style="font-family:var(--mono);font-size:0.8rem">85%</span>
+        <button class="btn btn-sm" onclick="saveDedupConfig()" data-i18n="save">Save</button>
+        <span class="status-text" id="dedupStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
+      </div>
+    </div>
+
+    <!-- 分组排序 -->
+    <div class="section">
+      <div class="section-title" data-i18n="groupOrderTitle">Site Group Order</div>
+      <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="groupOrderEnabled" onchange="saveGroupOrder()">
+          <span data-i18n="groupOrderEnabled">Enable group ordering</span>
+        </label>
+        <select id="groupOrderUnmatched" class="nt-input" style="width:auto;min-width:120px" onchange="saveGroupOrder()">
+          <option value="after">Unmatched → after</option>
+          <option value="before">Unmatched → before</option>
+        </select>
+        <span class="status-text" id="groupOrderStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
+      </div>
+      <div id="groupOrderRules"></div>
+      <button class="btn btn-sm" onclick="addGroupRule()" style="margin-top:8px" data-i18n="groupOrderAdd">+ Add Rule</button>
+    </div>
+
+    <!-- 背景设置 -->
+    <div class="section">
+      <div class="section-title" data-i18n="bgSettingsTitle">Background Settings</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <select id="bgType" class="nt-input" style="width:auto;min-width:120px" onchange="onBgTypeChange()">
+          <option value="default">Default</option>
+          <option value="image">Image URL</option>
+          <option value="solid">Solid Color</option>
+          <option value="gradient">Gradient</option>
+        </select>
+      </div>
+      <div id="bgImageGroup" style="display:none;margin-bottom:10px">
+        <input type="text" id="bgImageUrl" class="nt-input" placeholder="https://example.com/bg.jpg">
+      </div>
+      <div id="bgSolidGroup" style="display:none;margin-bottom:10px">
+        <input type="color" id="bgSolidColor" value="#0a0e14" style="width:50px;height:30px;border:none;cursor:pointer">
+      </div>
+      <div id="bgGradientGroup" style="display:none;margin-bottom:10px">
+        <input type="text" id="bgGradient" class="nt-input" placeholder="linear-gradient(180deg, #0a0e14, #1a2030)">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-sm" onclick="saveBgSettings()" data-i18n="save">Save</button>
+        <span class="status-text" id="bgStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agg Logs Tab -->
+  <div class="tab-panel" id="panelAggLogs">
+    <div class="section">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div class="section-title" style="margin:0" data-i18n="aggLogsTitle">Aggregation Logs</div>
+        <button class="btn btn-sm" onclick="clearAggLogs()" data-i18n="clearLogs">Clear All</button>
+      </div>
+      <div id="aggLogsList" style="font-size:0.85rem"></div>
+    </div>
   </div>
 
   <div class="footer">
@@ -562,7 +636,11 @@ const translations = {
     invalidToken:'Invalid token', enterToken:'Enter admin token', login:'Login',
     connectionFailed:'Connection failed',
     headerLabel:'Admin Console', navConfigEditor:'Config Editor', navDashboard:'Dashboard',
-    tabSources:'Sources', tabMacCMS:'MacCMS', tabLive:'Live', tabSettings:'Settings',
+    tabSources:'Sources', tabMacCMS:'MacCMS', tabLive:'Live', tabSettings:'Settings', tabAggLogs:'Logs',
+    aggLogsTitle:'Aggregation Logs', clearLogs:'Clear All',
+    dedupConfigTitle:'Similar Name Dedup', similarDedupLabel:'Enable similar-name dedup (keep fastest)', dedupThreshold:'Threshold',
+    groupOrderTitle:'Site Group Order', groupOrderEnabled:'Enable group ordering', groupOrderAdd:'+ Add Rule',
+    bgSettingsTitle:'Background Settings',
     addSource:'Add Source', aggregation:'Aggregation', sourcesList:'Sources',
     addMacCMS:'Add MacCMS Source', macCMSSources:'MacCMS Sources',
     addLiveSource:'Add Live Source', liveSources:'Live Sources',
@@ -628,7 +706,11 @@ const translations = {
     invalidToken:'无效的令牌', enterToken:'请输入管理令牌', login:'登录',
     connectionFailed:'连接失败',
     headerLabel:'管理控制台', navConfigEditor:'配置编辑', navDashboard:'仪表盘',
-    tabSources:'源', tabMacCMS:'MacCMS', tabLive:'直播', tabSettings:'设置',
+    tabSources:'源', tabMacCMS:'MacCMS', tabLive:'直播', tabSettings:'设置', tabAggLogs:'日志',
+    aggLogsTitle:'聚合日志', clearLogs:'清空',
+    dedupConfigTitle:'相似名称去重', similarDedupLabel:'启用相似名称去重（保留最快）', dedupThreshold:'阈值',
+    groupOrderTitle:'站点分组排序', groupOrderEnabled:'启用分组排序', groupOrderAdd:'+ 添加规则',
+    bgSettingsTitle:'背景设置',
     addSource:'添加源', aggregation:'聚合', sourcesList:'源列表',
     addMacCMS:'添加 MacCMS 源', macCMSSources:'MacCMS 源列表',
     addLiveSource:'添加直播源', liveSources:'直播源列表',
@@ -740,6 +822,10 @@ async function loadAll() {
   loadSearchQuota();
   loadCloudCredentials();
   loadChannelProbe();
+  loadDedupConfig();
+  loadGroupOrder();
+  loadBgSettings();
+  loadAggLogs();
 }
 
 async function loadStatus() {
@@ -1790,7 +1876,175 @@ async function revokeHighRisk(siteKey) {
   }
 }
 
+// ─── 去重配置 ──────────────────────────────────────────────
+async function loadDedupConfig() {
+  try {
+    const res = await auth.authFetch('/admin/dedup-config');
+    const cfg = await res.json();
+    $('similarDedupCheck').checked = cfg.similarDedup !== false;
+    const pct = Math.round((cfg.similarDedupThreshold || 0.85) * 100);
+    $('dedupThreshold').value = pct;
+    $('dedupThresholdVal').textContent = pct + '%';
+  } catch {}
+}
+async function saveDedupConfig() {
+  try {
+    const cfg = {
+      similarDedup: $('similarDedupCheck').checked,
+      similarDedupThreshold: parseInt($('dedupThreshold').value) / 100,
+    };
+    const res = await auth.authFetch('/admin/dedup-config', {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+    });
+    if (res.ok) { $('dedupStatus').textContent = '✓'; setTimeout(() => $('dedupStatus').textContent = '', 2000); }
+  } catch {}
+}
+
+// ─── 分组排序 ──────────────────────────────────────────────
+let groupRules = [];
+async function loadGroupOrder() {
+  try {
+    const res = await auth.authFetch('/admin/group-order');
+    const cfg = await res.json();
+    $('groupOrderEnabled').checked = cfg.enabled;
+    $('groupOrderUnmatched').value = cfg.unmatchedPosition || 'after';
+    groupRules = cfg.rules || [];
+    renderGroupRules();
+  } catch {}
+}
+function renderGroupRules() {
+  const container = $('groupOrderRules');
+  if (groupRules.length === 0) { container.innerHTML = '<div style="color:var(--text-dim);font-size:0.85rem">No rules yet</div>'; return; }
+  let html = '';
+  groupRules.forEach((rule, i) => {
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 8px;background:var(--surface-2);border-radius:4px">';
+    html += '<span style="font-family:var(--mono);font-size:0.8rem;min-width:20px;color:var(--text-dim)">#' + (i+1) + '</span>';
+    html += '<input type="text" value="' + esc(rule.name) + '" onchange="updateGroupRule(' + i + ',\\'name\\',this.value)" class="nt-input" style="width:80px" placeholder="Name">';
+    html += '<input type="text" value="' + esc(rule.keywords.join(',')) + '" onchange="updateGroupRule(' + i + ',\\'keywords\\',this.value)" class="nt-input" style="flex:1" placeholder="Keywords (comma-separated)">';
+    if (i > 0) html += '<button class="btn btn-sm" onclick="moveGroupRule(' + i + ',-1)">▲</button>';
+    if (i < groupRules.length - 1) html += '<button class="btn btn-sm" onclick="moveGroupRule(' + i + ',1)">▼</button>';
+    html += '<button class="btn btn-sm" style="color:var(--red)" onclick="removeGroupRule(' + i + ')">✕</button>';
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+function addGroupRule() {
+  groupRules.push({ name: '', keywords: [] });
+  renderGroupRules();
+}
+function removeGroupRule(i) { groupRules.splice(i, 1); renderGroupRules(); saveGroupOrder(); }
+function moveGroupRule(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= groupRules.length) return;
+  [groupRules[i], groupRules[j]] = [groupRules[j], groupRules[i]];
+  renderGroupRules(); saveGroupOrder();
+}
+function updateGroupRule(i, field, value) {
+  if (field === 'name') groupRules[i].name = value;
+  else if (field === 'keywords') groupRules[i].keywords = value.split(',').map(s => s.trim()).filter(Boolean);
+  saveGroupOrder();
+}
+async function saveGroupOrder() {
+  try {
+    const cfg = {
+      enabled: $('groupOrderEnabled').checked,
+      unmatchedPosition: $('groupOrderUnmatched').value,
+      rules: groupRules,
+    };
+    const res = await auth.authFetch('/admin/group-order', {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+    });
+    if (res.ok) { $('groupOrderStatus').textContent = '✓'; setTimeout(() => $('groupOrderStatus').textContent = '', 2000); }
+  } catch {}
+}
+
+// ─── 背景设置 ──────────────────────────────────────────────
+function onBgTypeChange() {
+  const t = $('bgType').value;
+  $('bgImageGroup').style.display = t === 'image' ? 'block' : 'none';
+  $('bgSolidGroup').style.display = t === 'solid' ? 'block' : 'none';
+  $('bgGradientGroup').style.display = t === 'gradient' ? 'block' : 'none';
+}
+async function loadBgSettings() {
+  try {
+    const res = await auth.authFetch('/admin/bg-settings');
+    if (!res.ok) return;
+    const cfg = await res.json();
+    $('bgType').value = cfg.type || 'default';
+    if (cfg.imageUrl) $('bgImageUrl').value = cfg.imageUrl;
+    if (cfg.solidColor) $('bgSolidColor').value = cfg.solidColor;
+    if (cfg.gradient) $('bgGradient').value = cfg.gradient;
+    onBgTypeChange();
+  } catch {}
+}
+async function saveBgSettings() {
+  try {
+    const cfg = {
+      type: $('bgType').value,
+      imageUrl: $('bgImageUrl').value,
+      solidColor: $('bgSolidColor').value,
+      gradient: $('bgGradient').value,
+    };
+    const res = await auth.authFetch('/admin/bg-settings', {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+    });
+    if (res.ok) {
+      $('bgStatus').textContent = '✓'; setTimeout(() => $('bgStatus').textContent = '', 2000);
+      loadBgFromServer();
+    }
+  } catch {}
+}
+
+// ─── 聚合日志 ──────────────────────────────────────────────
+async function loadAggLogs() {
+  try {
+    const res = await auth.authFetch('/admin/agg-logs?limit=50');
+    const data = await res.json();
+    const logs = data.logs || [];
+    if (logs.length === 0) {
+      $('aggLogsList').innerHTML = '<div style="color:var(--text-dim)">No aggregation logs yet.</div>';
+      return;
+    }
+    let html = '';
+    logs.forEach(log => {
+      const status = log.success ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--red)">✕</span>';
+      const time = new Date(log.startTime).toLocaleString();
+      const dur = (log.durationMs / 1000).toFixed(1) + 's';
+      html += '<div style="padding:8px;margin-bottom:6px;background:var(--surface-2);border-radius:4px;border-left:3px solid ' + (log.success ? 'var(--green)' : 'var(--red)') + '">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+      html += '<span>' + status + ' ' + time + '</span>';
+      html += '<span style="font-family:var(--mono);font-size:0.8rem;color:var(--text-dim)">' + dur + '</span>';
+      html += '</div>';
+      html += '<div style="font-size:0.8rem;color:var(--text-dim);margin-top:4px">';
+      html += 'Sources: ' + log.okSources + '/' + log.totalSources + ' OK';
+      html += ' &middot; Sites: ' + log.finalSiteCount + ' &middot; Parses: ' + log.finalParseCount + ' &middot; Lives: ' + log.finalLiveCount;
+      html += '</div>';
+      if (log.addedSites && log.addedSites.length > 0) {
+        html += '<div style="font-size:0.8rem;color:var(--green);margin-top:2px">+ ' + log.addedSites.map(s => s.name || s.key).join(', ') + '</div>';
+      }
+      if (log.removedSites && log.removedSites.length > 0) {
+        html += '<div style="font-size:0.8rem;color:var(--red);margin-top:2px">- ' + log.removedSites.map(s => s.name || s.key).join(', ') + '</div>';
+      }
+      if (log.failedSources && log.failedSources.length > 0) {
+        html += '<div style="font-size:0.75rem;color:var(--amber);margin-top:2px">Failed: ' + log.failedSources.map(s => s.name).join(', ') + '</div>';
+      }
+      if (log.errorMessage) {
+        html += '<div style="font-size:0.75rem;color:var(--red);margin-top:2px">Error: ' + esc(log.errorMessage) + '</div>';
+      }
+      html += '</div>';
+    });
+    $('aggLogsList').innerHTML = html;
+  } catch {}
+}
+async function clearAggLogs() {
+  if (!confirm('Clear all aggregation logs?')) return;
+  await auth.authFetch('/admin/agg-logs', { method: 'DELETE' });
+  loadAggLogs();
+}
+
 applyTheme(getTheme());
+initThemeDropdown();
+loadBgFromServer();
 applyLang(translations, getLang());
 </script>
 </body>
