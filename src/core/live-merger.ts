@@ -179,7 +179,7 @@ export function formatLiveGroupsAsTxt(groups: TVBoxLiveGroup[]): string {
 }
 
 /** 自动识别 m3u 还是 txt */
-function parseLiveContent(content: string, source: string, sourceSpeedMs?: number): ChannelEntry[] {
+export function parseLiveContent(content: string, source: string, sourceSpeedMs?: number): ChannelEntry[] {
   if (content.includes('#EXTM3U') || content.includes('#EXTINF')) {
     return parseM3U(content, source, sourceSpeedMs);
   }
@@ -438,4 +438,64 @@ export function extractAllUrls(groups: TVBoxLiveGroup[]): string[] {
     }
   }
   return Array.from(set);
+}
+
+/**
+ * 轻量级实时解析：给定一组 m3u/txt URL，下载并解析为 TVBoxLiveGroup[]
+ * 用于 /live-config 端点在 FongMi 格式下实时转换
+ */
+export async function fetchAndParseLiveUrls(
+  urls: Array<{ name: string; url: string; header?: Record<string, string> }>,
+  timeoutMs = 8000,
+): Promise<TVBoxLiveGroup[]> {
+  if (urls.length === 0) return [];
+
+  const results = await Promise.allSettled(
+    urls.map(async (input) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(input.url, {
+          signal: controller.signal,
+          headers: { 'User-Agent': TVBOX_UA, ...(input.header || {}) },
+        });
+        clearTimeout(timer);
+        if (!resp.ok) return null;
+        const text = await resp.text();
+        if (!text || text.length < 20) return null;
+        return { content: text, name: input.name };
+      } catch {
+        clearTimeout(timer);
+        return null;
+      }
+    }),
+  );
+
+  const allEntries: Array<{ group: string; name: string; url: string }> = [];
+  for (const r of results) {
+    if (r.status !== 'fulfilled' || !r.value) continue;
+    const entries = parseLiveContent(r.value.content, r.value.name);
+    allEntries.push(...entries);
+  }
+
+  // 按 group + name 合并 urls
+  const groupMap = new Map<string, Map<string, string[]>>();
+  for (const e of allEntries) {
+    const grp = e.group || '其他';
+    if (!groupMap.has(grp)) groupMap.set(grp, new Map());
+    const channels = groupMap.get(grp)!;
+    if (!channels.has(e.name)) channels.set(e.name, []);
+    const urls = channels.get(e.name)!;
+    if (!urls.includes(e.url)) urls.push(e.url);
+  }
+
+  const groups: TVBoxLiveGroup[] = [];
+  for (const [group, channels] of groupMap) {
+    const chs: TVBoxLiveChannel[] = [];
+    for (const [name, urls] of channels) {
+      chs.push({ name, urls });
+    }
+    groups.push({ group, channels: chs });
+  }
+  return groups;
 }
