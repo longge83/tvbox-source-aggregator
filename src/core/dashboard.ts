@@ -694,6 +694,7 @@ function renderHealthTable(records) {
 applyTheme(getTheme());
 initThemeDropdown();
 loadBgFromServer();
+loadVersion();
 applyLang(translations, getLang());
 loadStatus();
 loadSourceHealth();

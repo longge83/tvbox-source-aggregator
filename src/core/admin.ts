@@ -2061,6 +2061,7 @@ async function saveBgSettings() {
     if (res.ok) {
       $('bgStatus').textContent = '✓'; setTimeout(() => $('bgStatus').textContent = '', 2000);
       loadBgFromServer();
+loadVersion();
     }
   } catch {}
 }
@@ -2205,6 +2206,7 @@ loadAutoClean();
 applyTheme(getTheme());
 initThemeDropdown();
 loadBgFromServer();
+loadVersion();
 applyLang(translations, getLang());
 </script>
 </body>

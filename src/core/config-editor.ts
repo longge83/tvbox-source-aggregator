@@ -812,6 +812,7 @@ switchTab = function(tab) {
 applyTheme(getTheme());
 initThemeDropdown();
 loadBgFromServer();
+loadVersion();
 applyLang(_translations, getLang());
 </script>
 </body>
