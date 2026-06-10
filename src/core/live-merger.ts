@@ -423,6 +423,74 @@ export async function mergeLivesToNative(
 }
 
 /**
+ * 按源分类模式：每个源独立解析，用「源名」前缀拼接 group 名，不做跨源去重
+ */
+export async function separatedMergeLives(
+  sources: LiveSourceInput[],
+  fetchTimeoutMs: number,
+): Promise<MergeLivesResult> {
+  if (sources.length === 0) {
+    return { groups: [], totalChannels: 0, totalUrls: 0, sourcesDownloaded: 0, sourcesFailed: 0 };
+  }
+
+  console.log(`[live-merger] Separated mode: downloading ${sources.length} live source files...`);
+
+  const downloadResults = await Promise.allSettled(
+    sources.map((s) => downloadLive(s, fetchTimeoutMs).then((content) => ({ input: s, content }))),
+  );
+
+  let sourcesDownloaded = 0;
+  let sourcesFailed = 0;
+  const allGroups: TVBoxLiveGroup[] = [];
+  let totalChannels = 0;
+  let totalUrls = 0;
+
+  for (const r of downloadResults) {
+    if (r.status !== 'fulfilled' || !r.value.content) {
+      sourcesFailed++;
+      continue;
+    }
+    sourcesDownloaded++;
+    const { input, content } = r.value;
+    const sourceName = input.name || 'source';
+
+    try {
+      const entries = parseLiveContent(content, sourceName, input.speedMs);
+      if (entries.length === 0) continue;
+
+      // 按 group 分组（源内去重）
+      const groupMap = new Map<string, Map<string, string[]>>();
+      for (const e of entries) {
+        const grp = e.group || '其他';
+        if (!groupMap.has(grp)) groupMap.set(grp, new Map());
+        const channels = groupMap.get(grp)!;
+        if (!channels.has(e.name)) channels.set(e.name, []);
+        const urls = channels.get(e.name)!;
+        if (!urls.includes(e.url)) urls.push(e.url);
+      }
+
+      // 用「源名」前缀拼接 group 名
+      for (const [grp, channels] of groupMap) {
+        const prefixedGroup = `「${sourceName}」${grp}`;
+        const chs: TVBoxLiveChannel[] = [];
+        for (const [name, urls] of channels) {
+          chs.push({ name, urls });
+          totalUrls += urls.length;
+        }
+        totalChannels += chs.length;
+        allGroups.push({ group: prefixedGroup, channels: chs });
+      }
+    } catch (err) {
+      console.warn(`[live-merger] Separated parse failed for ${sourceName}: ${err}`);
+    }
+  }
+
+  console.log(`[live-merger] Separated done: ${sourcesDownloaded}/${sources.length} sources, ${allGroups.length} groups, ${totalChannels} channels`);
+
+  return { groups: allGroups, totalChannels, totalUrls, sourcesDownloaded, sourcesFailed };
+}
+
+/**
  * 从合并后的 groups 提取所有 (url, sourceSpeedMs) 对供 channel-probe 测速
  * URL 是 `$源名` 剥离后的裸 URL
  */

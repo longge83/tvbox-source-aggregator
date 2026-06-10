@@ -79,6 +79,8 @@ export const KV_DEDUP_CONFIG = 'dedup_config';
 
 // 直播禁用开关
 export const KV_LIVE_DISABLED = 'live_disabled';
+// 直播合并模式：'separated'（按源分类）| 'merged'（全部合并）
+export const KV_LIVE_MERGE_MODE = 'live_merge_mode';
 
 // 智能 Base URL
 export const BASE_URL_PLACEHOLDER = '{{BASE_URL}}';

@@ -409,6 +409,19 @@ ${sharedStyles}
         <span class="status-text" id="liveDisabledStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
       </div>
     </div>
+
+    <!-- Live Merge Mode -->
+    <div class="section">
+      <div class="section-title">直播合并模式</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button id="liveMergeSeparated" class="btn btn-sm active" onclick="setLiveMergeMode('separated')">📂 分离模式（按源分类）</button>
+        <button id="liveMergeMerged" class="btn btn-sm" onclick="setLiveMergeMode('merged')">🔀 合并模式（去重混合）</button>
+        <span class="status-text" id="liveMergeModeStatus" style="font-family:var(--mono);font-size:0.75rem"></span>
+      </div>
+      <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px">
+        分离模式：每个直播源独立展示，用「源名」前缀区分。合并模式：所有源的频道按名称去重合并为统一列表。
+      </div>
+    </div>
   </div>
 
   <!-- Search Quota Tab -->
@@ -2114,6 +2127,29 @@ async function saveLiveDisabled() {
   setTimeout(() => $('liveDisabledStatus').textContent = '', 2000);
 }
 
+// ─── 直播合并模式 ──────────
+async function loadLiveMergeMode() {
+  try {
+    const r = await auth.authFetch('/admin/live-merge-mode');
+    const d = await r.json();
+    const mode = d.mode || 'separated';
+    $('liveMergeSeparated').classList.toggle('active', mode === 'separated');
+    $('liveMergeMerged').classList.toggle('active', mode === 'merged');
+  } catch {}
+}
+async function setLiveMergeMode(mode) {
+  $('liveMergeSeparated').classList.toggle('active', mode === 'separated');
+  $('liveMergeMerged').classList.toggle('active', mode === 'merged');
+  $('liveMergeModeStatus').textContent = '⏳';
+  try {
+    await auth.authFetch('/admin/live-merge-mode', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode}) });
+    $('liveMergeModeStatus').textContent = '✓ 已切换并刷新';
+    setTimeout(() => $('liveMergeModeStatus').textContent = '', 3000);
+  } catch(e) {
+    $('liveMergeModeStatus').textContent = '✗ 失败';
+  }
+}
+
 // ─── 智能 Base URL ──────────
 async function loadSmartBaseUrl() {
   try {
@@ -2161,6 +2197,7 @@ async function saveAutoClean() {
 
 // ─── Init new settings ───────
 loadLiveDisabled();
+loadLiveMergeMode();
 loadSmartBaseUrl();
 loadProbeDepth();
 loadAutoClean();

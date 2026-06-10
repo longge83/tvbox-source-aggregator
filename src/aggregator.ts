@@ -7,9 +7,9 @@ import { mergeConfigs, cleanLocalRefs, cleanEmptyEntries } from './core/merger';
 import { batchSiteSpeedTest, appendSpeedToName, filterUnreachableSites, type SiteProbeResult } from './core/speedtest';
 import { macCMSToTVBoxSites, processMacCMSForLocal } from './core/maccms';
 import { rewriteJarUrls } from './core/jar-proxy';
-import { mergeLivesToNative, type LiveSourceInput } from './core/live-merger';
+import { mergeLivesToNative, separatedMergeLives, type LiveSourceInput } from './core/live-merger';
 import { loadSpeedMap as loadChannelSpeedMap } from './core/channel-probe';
-import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_CHANNEL_MERGED_TREE, KV_AGG_LOGS, AGG_LOGS_MAX, KV_SITE_SNAPSHOT, KV_DEDUP_CONFIG, KV_LIVE_DISABLED, BASE_URL_PLACEHOLDER, KV_SITE_HEALTH_MAP, KV_SITE_PROBE_DEPTH, KV_SITE_AUTO_CLEAN } from './core/config';
+import { KV_MERGED_CONFIG, KV_MERGED_CONFIG_FULL, KV_SOURCE_URLS, KV_LAST_UPDATE, KV_MANUAL_SOURCES, KV_MACCMS_SOURCES, KV_LIVE_SOURCES, KV_BLACKLIST, KV_INLINE_PREFIX, KV_NAME_TRANSFORM, KV_SOURCE_HEALTH, KV_SPEED_TEST_ENABLED, KV_EDGE_PROXIES, KV_SEARCH_QUOTA_REPORT, KV_CHANNEL_MERGED_TREE, KV_AGG_LOGS, AGG_LOGS_MAX, KV_SITE_SNAPSHOT, KV_DEDUP_CONFIG, KV_LIVE_DISABLED, KV_LIVE_MERGE_MODE, BASE_URL_PLACEHOLDER, KV_SITE_HEALTH_MAP, KV_SITE_PROBE_DEPTH, KV_SITE_AUTO_CLEAN } from './core/config';
 import { loadBlacklist, applyBlacklist, pruneBlacklist, saveBlacklist, siteFingerprint } from './core/blacklist';
 import { transformSiteNames } from './core/cleaner';
 import { parseConfigJson, type FetchProxyConfig } from './core/fetcher';
@@ -416,12 +416,16 @@ async function _runAggregation(storage: Storage, config: AppConfig, startTime: n
       logger.info('aggregation', 'Step 6.5: No live sources to merge');
       merged.lives = [];
     } else {
-      logger.infoFields('aggregation', 'Step 6.5: live-sources', { unique: uniqueInputs.length });
+      const liveMergeMode = (await storage.get(KV_LIVE_MERGE_MODE)) || 'separated';
+      logger.infoFields('aggregation', 'Step 6.5: live-sources', { unique: uniqueInputs.length, mode: liveMergeMode });
 
-      // 加载频道级测速缓存（仅 Node/Docker 有）
-      const channelSpeedMap = await loadChannelSpeedMap(storage);
-
-      const mergeResult = await mergeLivesToNative(uniqueInputs, config.fetchTimeoutMs, channelSpeedMap);
+      let mergeResult;
+      if (liveMergeMode === 'separated') {
+        mergeResult = await separatedMergeLives(uniqueInputs, config.fetchTimeoutMs);
+      } else {
+        const channelSpeedMap = await loadChannelSpeedMap(storage);
+        mergeResult = await mergeLivesToNative(uniqueInputs, config.fetchTimeoutMs, channelSpeedMap);
+      }
       merged.lives = mergeResult.groups;
 
       // 保存合并树供 channel-probe 使用
