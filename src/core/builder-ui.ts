@@ -788,6 +788,7 @@ applyTheme(getTheme());
 initThemeDropdown();
 loadBgFromServer();
 loadVersion();
+document.body.style.opacity = '1';
 </script>
 </body>
 </html>`;

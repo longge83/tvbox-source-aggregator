@@ -274,6 +274,7 @@ ${sharedStyles}
     <h1 class="header-title">TVBox <span>Config</span></h1>
     <div class="header-nav">
       <a href="/admin" data-i18n="navAdmin">Admin</a>
+      <a href="/builder">Builder</a>
       <a href="/status" data-i18n="navDashboard">Dashboard</a>
     </div>
   </header>

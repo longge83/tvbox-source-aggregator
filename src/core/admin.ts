@@ -276,6 +276,7 @@ ${sharedStyles}
     <h1 class="header-title">Source <span>Manager</span></h1>
     <nav class="header-nav">
       <a href="/admin/config-editor" data-i18n="navConfigEditor">Config Editor</a>
+      <a href="/builder">Builder</a>
       <a href="/status" data-i18n="navDashboard">Dashboard</a>
     </nav>
     <!-- Aggregation status bar -->
